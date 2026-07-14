@@ -1,0 +1,92 @@
+/** @type {import('jest').Config} */
+require("dotenv").config({ path: ".env" });
+
+module.exports = {
+  testEnvironment: "node",
+  testMatch: [
+    "**/__tests__/**/*.js",
+    "**/tests/**/*.test.js",
+    "**/tests/**/*.spec.js",
+  ],
+  testPathIgnorePatterns: ["src/tests/e2e/", "/node_modules/"],
+  verbose: true,
+  forceExit: false,
+  clearMocks: true,
+  restoreMocks: true,
+  resetMocks: false,
+  collectCoverage: true,
+  collectCoverageFrom: [
+    "src/app.js",
+    "src/config/**/*.js",
+    "src/constants/**/*.js",
+    "src/controllers/**/*.js",
+    "src/middlewares/**/*.js",
+    "src/routes/**/*.js",
+    "src/services/**/*.js",
+    "src/utils/**/*.js",
+    "src/validators/**/*.js",
+  ],
+  coverageDirectory: "coverage",
+  coveragePathIgnorePatterns: [
+    "/node_modules/",
+    "/tests/",
+    "/__tests__/",
+    "src/config/",
+    "src/constants/",
+    "src/docs/",
+    "src/models/",
+    "src/scripts/",
+  ],
+  coverageThreshold: {
+    "global": {
+      branches: 98,
+      functions: 98,
+      lines: 98,
+      statements: 98,
+    },
+    "./src/validators/": {
+      branches: 98,
+      functions: 98,
+      lines: 98,
+      statements: 98,
+    },
+    "./src/utils/": {
+      branches: 98,
+      functions: 98,
+      lines: 98,
+      statements: 98,
+    },
+    "./src/middlewares/": {
+      branches: 98,
+      functions: 98,
+      lines: 98,
+      statements: 98,
+    },
+    "./src/controllers/": {
+      branches: 98,
+      functions: 98,
+      lines: 98,
+      statements: 98,
+    },
+    "./src/services/": {
+      branches: 98,
+      functions: 98,
+      lines: 98,
+      statements: 98,
+    },
+    "./src/routes/": {
+      branches: 98,
+      functions: 98,
+      lines: 98,
+      statements: 98,
+    },
+  },
+  transform: {},
+  transformIgnorePatterns: ["/node_modules/"],
+  moduleNameMapper: {
+    "^uuid$": "<rootDir>/__mocks__/uuid.js",
+    "^otplib$": "<rootDir>/__mocks__/otplib.js",
+  },
+  moduleFileExtensions: ["js", "json"],
+  testTimeout: 10000,
+};
