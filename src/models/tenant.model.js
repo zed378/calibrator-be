@@ -90,6 +90,13 @@ const defineModel = (db, DataTypes) => {
         allowNull: true,
         unique: true,
       },
+      // Parent tenant for hierarchy / sub-organizations. Null = root tenant.
+      parentId: {
+        type: DataTypes.UUID,
+        allowNull: true,
+        references: { model: "tenants", key: "id" },
+        onDelete: "SET NULL",
+      },
       isDeleted: {
         type: DataTypes.BOOLEAN,
         defaultValue: false,

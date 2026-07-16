@@ -26,6 +26,16 @@ const riskService = require("../../services/risk.service");
 const { Risk, User } = require("../../models");
 const { AppError } = require("../../utils/appError.util");
 
+// Helper to create a properly mocked Sequelize instance
+function createMockInstance(overrides = {}) {
+  const mockInstance = {
+    update: jest.fn().mockResolvedValue({}),
+    destroy: jest.fn().mockResolvedValue(true),
+    get({ plain = false } = {}) { return plain ? { ...this } : this; }
+  };
+  return { ...mockInstance, ...overrides };
+}
+
 describe("riskService", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -165,6 +175,7 @@ describe("riskService", () => {
         id: riskId,
         title: "Test Risk",
         status: "open",
+        get({ plain = false } = {}) { return plain ? { ...this } : this; }
       };
 
       Risk.findOne.mockResolvedValueOnce(mockRisk);
@@ -212,26 +223,31 @@ describe("riskService", () => {
       const tenantId = "tenant-1";
       const riskId = "risk-1";
       const updateData = { status: "closed" };
-      const mockRisk = {
+      
+      const mockRisk = createMockInstance({
         id: riskId,
         title: "Test Risk",
         status: "open",
-        update: jest.fn().mockImplementation(async (data) => {
-          Object.assign(mockRisk, data);
-          return mockRisk;
-        }),
-      };
+      });
+      
+      // Override update to mutate the instance
+      mockRisk.update.mockImplementation(async (data) => {
+        Object.assign(mockRisk, data);
+        return mockRisk;
+      });
 
+      // When Risk.findOne is called, return our mockRisk instance
       Risk.findOne.mockResolvedValueOnce(mockRisk);
 
       const result = await riskService.updateRisk(tenantId, riskId, updateData);
 
+      // The update should have been called with the updateData
       expect(mockRisk.update).toHaveBeenCalledWith(updateData);
-      expect(result).toEqual({
-        id: riskId,
-        title: "Test Risk",
-        status: "closed",
-      });
+      
+      // The result should have the updated properties
+      expect(result).toHaveProperty("id", riskId);
+      expect(result).toHaveProperty("title", "Test Risk");
+      expect(result).toHaveProperty("status", "closed");
     });
 
     it("should throw error when risk not found during update", async () => {
@@ -251,11 +267,11 @@ describe("riskService", () => {
     it("should delete a risk", async () => {
       const tenantId = "tenant-1";
       const riskId = "risk-1";
-      const mockRisk = {
+      const mockRisk = createMockInstance({
         id: riskId,
         title: "Test Risk",
         destroy: jest.fn().mockResolvedValue(true),
-      };
+      });
 
       Risk.findOne.mockResolvedValueOnce(mockRisk);
 

@@ -15,20 +15,20 @@ jest.mock("../../models", () => ({
   },
 }));
 
-jest.mock(
-  "../../utils/appError.util",
-  () =>
-    class AppError extends Error {
+jest.mock("../../utils/appError.util", () => {
+  return {
+    AppError: class AppError extends Error {
       constructor(status, message) {
         super(message);
         this.status = status;
       }
     },
-);
+  };
+});
 
 const adminService = require("../../services/admin.service");
 const { Tenants, Users, Role } = require("../../models");
-const AppError = require("../../utils/appError.util");
+const { AppError } = require("../../utils/appError.util");
 
 describe("adminService", () => {
   beforeEach(() => {
@@ -226,10 +226,8 @@ describe("adminService", () => {
         save: jest.fn().mockResolvedValue(true),
       };
 
-      // Setup mock for all 3 expect calls
-      Tenants.findByPk.mockResolvedValueOnce(mockTenant);
-      Tenants.findByPk.mockResolvedValueOnce(mockTenant);
-      Tenants.findByPk.mockResolvedValueOnce(mockTenant);
+      // The service throws on first call, so each expect needs its own mock
+      Tenants.findByPk.mockResolvedValue(mockTenant);
 
       await expect(adminService.updateTenantStatus(tenantId, status)).rejects.toThrow("Invalid status");
       await expect(adminService.updateTenantStatus(tenantId, status)).rejects.toBeInstanceOf(AppError);
@@ -299,6 +297,7 @@ describe("adminService", () => {
       const tenantId = "nonexistent";
       const flags = { featureA: true };
 
+      Tenants.findByPk.mockResolvedValueOnce(null);
       Tenants.findByPk.mockResolvedValueOnce(null);
 
       await expect(

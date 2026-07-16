@@ -88,6 +88,66 @@
       "description": "Digital signature workflow management endpoints for 21 CFR Part 11 compliance including key pair generation, workflow management, and signature verification"
     },
     {
+      "name": "QMS",
+      "description": "Quality Management System endpoints for non-conformances (NC) and corrective/preventive actions (CAPA)"
+    },
+    {
+      "name": "SOP",
+      "description": "Standard Operating Procedure endpoints for controlled documents and tenant-wide training acknowledgment"
+    },
+    {
+      "name": "Risk",
+      "description": "Risk register endpoints (ISO 14971): risk assessment with severity × likelihood scoring and mitigation tracking"
+    },
+    {
+      "name": "SupplierScorecard",
+      "description": "Supplier performance scorecard endpoints for periodic quality/delivery/service evaluation of vendors"
+    },
+    {
+      "name": "Maintenance",
+      "description": "Maintenance work-order endpoints (preventive, breakdown, repair) for calibration devices"
+    },
+    {
+      "name": "PredictiveMaintenance",
+      "description": "Predictive maintenance endpoints: IoT anomaly analysis and calibration-interval recommendations"
+    },
+    {
+      "name": "IoT",
+      "description": "IoT telemetry ingestion endpoints (device-token authenticated) with anomaly detection against reading tolerances"
+    },
+    {
+      "name": "AI",
+      "description": "AI assistant endpoints: certificate OCR extraction and retrieval-augmented (RAG) document Q&A"
+    },
+    {
+      "name": "FeatureFlags",
+      "description": "Per-tenant feature flag endpoints for evaluating, overriding, and initializing capability toggles"
+    },
+    {
+      "name": "TenantLifecycle",
+      "description": "Tenant lifecycle endpoints: suspension, resumption, grace period, offboarding, and data export"
+    },
+    {
+      "name": "DataRetention",
+      "description": "Data retention & privacy governance endpoints: retention policies, legal hold, purge, PII masking, and anonymization"
+    },
+    {
+      "name": "OIDC",
+      "description": "OpenID Connect provider endpoints: discovery, JWKS, and dynamic client registration/rotation"
+    },
+    {
+      "name": "WebAuthn",
+      "description": "WebAuthn / FIDO passwordless endpoints for security-key registration and assertion verification"
+    },
+    {
+      "name": "NetworkSecurity",
+      "description": "Network security endpoints: per-tenant IP allowlist (CIDR), geofencing, and login evaluation"
+    },
+    {
+      "name": "SCIM",
+      "description": "SCIM 2.0 provisioning endpoints for automated Users and Groups lifecycle from an external IdP"
+    },
+    {
       "name": "Admin",
       "description": "Super Admin backend management endpoints"
     },
@@ -120,40 +180,12 @@
       "description": "Asset finance records and depreciation reporting for calibration devices"
     },
     {
-      "name": "NetworkSecurity",
-      "description": "Network Security - IP Allowlist and Geofencing"
-    },
-    {
-      "name": "OIDC",
-      "description": "OpenID Connect Provider"
-    },
-    {
-      "name": "QMS",
-      "description": "Quality Management System endpoints (CAPA, Non-Conformance)"
-    },
-    {
       "name": "Reports",
       "description": "Tenant-scoped analytics and reporting"
     },
     {
-      "name": "SCIM",
-      "description": "SCIM v2 Provisioning Endpoints for Identity Providers"
-    },
-    {
-      "name": "SOP",
-      "description": "Document Control and Training System"
-    },
-    {
-      "name": "Tenant Backups",
-      "description": "Endpoints for managing tenant backups and restores"
-    },
-    {
       "name": "UserPermissions",
       "description": "Per-user permission overrides (role inheritance + custom grants/denies)"
-    },
-    {
-      "name": "WebAuthn",
-      "description": "WebAuthn Passkey Authentication"
     },
     {
       "name": "Webhooks",
@@ -302,6 +334,87 @@
         "responses": {
           "200": {
             "description": "Tenant flags updated"
+          }
+        }
+      }
+    },
+    "/api/v1/ai/ocr": {
+      "post": {
+        "summary": "Certificate OCR extraction",
+        "description": "Extracts structured data from an uploaded certificate image or PDF. Requires authentication.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OCR extraction completed successfully"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/ai/query": {
+      "post": {
+        "summary": "RAG document Q&A",
+        "description": "Answers a question over indexed documents using retrieval-augmented generation. Requires authentication.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "question": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Answer generated successfully"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
           }
         }
       }
@@ -4747,6 +4860,358 @@
         }
       }
     },
+    "/api/v1/tenants/{tenantId}/policy": {
+      "get": {
+        "summary": "Get retention policy",
+        "description": "Returns the data retention policy for the tenant.",
+        "tags": [
+          "DataRetention"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retention policy returned"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "put": {
+        "summary": "Set retention policy",
+        "description": "Sets the data retention policy for the tenant. Super admin only.",
+        "tags": [
+          "DataRetention"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "policyKey": {
+                    "type": "string"
+                  },
+                  "days": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Retention policy updated"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/legal-hold": {
+      "get": {
+        "summary": "Get legal-hold status",
+        "description": "Returns the legal-hold status for the tenant.",
+        "tags": [
+          "DataRetention"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Legal-hold status returned"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "post": {
+        "summary": "Enable legal hold",
+        "description": "Enables legal hold for the tenant. Super admin only.",
+        "tags": [
+          "DataRetention"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Legal hold enabled"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Disable legal hold",
+        "description": "Disables legal hold for the tenant. Super admin only.",
+        "tags": [
+          "DataRetention"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Legal hold disabled"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/purge": {
+      "post": {
+        "summary": "Purge expired records",
+        "description": "Purges expired records for the tenant. Super admin only.",
+        "tags": [
+          "DataRetention"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Expired records purged"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/mask-pii": {
+      "post": {
+        "summary": "Mask PII fields",
+        "description": "Masks PII fields for the specified records. Super admin only.",
+        "tags": [
+          "DataRetention"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "entityType": {
+                    "type": "string"
+                  },
+                  "recordIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "PII fields masked"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/anonymize": {
+      "post": {
+        "summary": "Anonymize a dataset",
+        "description": "Anonymizes a dataset for the tenant. Super admin only.",
+        "tags": [
+          "DataRetention"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "entityType": {
+                    "type": "string"
+                  },
+                  "options": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Dataset anonymized"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
     "/api/v1/e-signature/key-pairs": {
       "get": {
         "summary": "Get key pairs",
@@ -5448,6 +5913,237 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/feature-flags": {
+      "get": {
+        "summary": "Get effective flags for a tenant",
+        "description": "Returns the effective feature flags for the specified tenant.",
+        "tags": [
+          "FeatureFlags"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Effective flags returned"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/feature-flags/definitions": {
+      "get": {
+        "summary": "Get the flag definitions catalog",
+        "description": "Returns the catalog of available feature flag definitions.",
+        "tags": [
+          "FeatureFlags"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Flag definitions returned"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/feature-flags/{tenantId}/{flagKey}": {
+      "get": {
+        "summary": "Check whether a flag is enabled",
+        "description": "Returns whether the given flag is enabled for the tenant.",
+        "tags": [
+          "FeatureFlags"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "path",
+            "name": "flagKey",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Flag status returned"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "post": {
+        "summary": "Set a flag override",
+        "description": "Sets a per-tenant flag override. Super admin only.",
+        "tags": [
+          "FeatureFlags"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "path",
+            "name": "flagKey",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Flag updated"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Reset a flag to default",
+        "description": "Resets a per-tenant flag override to its default. Super admin only.",
+        "tags": [
+          "FeatureFlags"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "path",
+            "name": "flagKey",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Flag reset to default"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/v1/feature-flags/{tenantId}/initialize": {
+      "post": {
+        "summary": "Seed a tenant's default flags",
+        "description": "Seeds the tenant's default feature flags. Super admin only.",
+        "tags": [
+          "FeatureFlags"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default flags seeded"
           },
           "401": {
             "description": "Unauthorized"
@@ -6227,6 +6923,48 @@
           },
           "401": {
             "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/iot/ingest": {
+      "post": {
+        "summary": "Ingest device telemetry",
+        "description": "Ingests device telemetry readings. Public endpoint authenticated via device token in the x-iot-token header (not bearerAuth).",
+        "tags": [
+          "IoT"
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-iot-token",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Telemetry ingested successfully"
+          },
+          "400": {
+            "description": "Validation error"
           }
         }
       }
@@ -7865,6 +8603,181 @@
         }
       }
     },
+    "/api/v1/network-security/ip-allowlist": {
+      "get": {
+        "summary": "Get the IP allowlist",
+        "description": "Returns the tenant's CIDR allowlist.",
+        "tags": [
+          "NetworkSecurity"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The current CIDR allowlist"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      },
+      "put": {
+        "summary": "Set the IP allowlist",
+        "description": "Replaces the tenant's CIDR allowlist. Super admin only.",
+        "tags": [
+          "NetworkSecurity"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "cidrs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Allowlist updated"
+          },
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/network-security/geofence": {
+      "get": {
+        "summary": "Get the geofence configuration",
+        "description": "Returns the tenant's geofence configuration.",
+        "tags": [
+          "NetworkSecurity"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The current geofence configuration"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      },
+      "put": {
+        "summary": "Set the geofence configuration",
+        "description": "Replaces the tenant's geofence configuration. Super admin only.",
+        "tags": [
+          "NetworkSecurity"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "latitude": {
+                    "type": "number"
+                  },
+                  "longitude": {
+                    "type": "number"
+                  },
+                  "radiusKm": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Geofence updated"
+          },
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/network-security/evaluate-login": {
+      "post": {
+        "summary": "Evaluate an IP and location at login",
+        "description": "Evaluates a given IP address and location against the tenant's network security policies.",
+        "tags": [
+          "NetworkSecurity"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ip": {
+                    "type": "string"
+                  },
+                  "latitude": {
+                    "type": "number"
+                  },
+                  "longitude": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Evaluation result"
+          },
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
     "/api/v1/notifications": {
       "get": {
         "summary": "Get all user notifications",
@@ -8022,6 +8935,637 @@
           },
           "404": {
             "description": "Notification not found"
+          }
+        }
+      }
+    },
+    "/api/v1/oidc/.well-known/openid-configuration": {
+      "get": {
+        "summary": "OIDC discovery metadata",
+        "description": "Returns the OpenID Connect provider discovery metadata document.",
+        "tags": [
+          "OIDC"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OIDC discovery metadata"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/oidc/.well-known/jwks.json": {
+      "get": {
+        "summary": "Provider JWKS",
+        "description": "Returns the provider's JSON Web Key Set.",
+        "tags": [
+          "OIDC"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON Web Key Set"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/oidc/clients": {
+      "post": {
+        "summary": "Register an OIDC client",
+        "description": "Registers a new OIDC client. Super admin only.",
+        "tags": [
+          "OIDC"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "redirectUris": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "scopes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "grantTypes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Client registered"
+          },
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      },
+      "get": {
+        "summary": "List tenant OIDC clients",
+        "description": "Returns the OIDC clients registered for the tenant.",
+        "tags": [
+          "OIDC"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of OIDC clients"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/oidc/clients/{clientId}/rotate-secret": {
+      "post": {
+        "summary": "Rotate a client secret",
+        "description": "Rotates the secret for an OIDC client. Super admin only.",
+        "tags": [
+          "OIDC"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Client secret rotated"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Client not found"
+          }
+        }
+      }
+    },
+    "/api/v1/oidc/clients/{clientId}": {
+      "delete": {
+        "summary": "Delete an OIDC client",
+        "description": "Deletes an OIDC client. Super admin only.",
+        "tags": [
+          "OIDC"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Client deleted"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Client not found"
+          }
+        }
+      }
+    },
+    "/api/v1/predictive-maintenance/analyze/{deviceId}": {
+      "post": {
+        "summary": "Run IoT anomaly analysis for a device",
+        "description": "Runs IoT anomaly analysis for the specified device. Requires authentication.",
+        "tags": [
+          "PredictiveMaintenance"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deviceId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Device ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Analysis completed"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Device not found"
+          }
+        }
+      }
+    },
+    "/api/v1/predictive-maintenance/recommendations": {
+      "get": {
+        "summary": "List devices with a pending recommendation",
+        "description": "Returns devices that have a pending calibration recommendation. Requires authentication.",
+        "tags": [
+          "PredictiveMaintenance"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of devices with pending recommendations"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/predictive-maintenance/recommendations/{deviceId}/approve": {
+      "post": {
+        "summary": "Apply the recommended calibration interval",
+        "description": "Applies the recommended calibration interval for the specified device. Requires authentication.",
+        "tags": [
+          "PredictiveMaintenance"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deviceId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Device ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recommendation applied"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Device not found"
+          }
+        }
+      }
+    },
+    "/api/v1/qms/nc": {
+      "post": {
+        "summary": "Create a non-conformance",
+        "description": "Creates a non-conformance record. Requires authentication. Scoped API keys are rejected (denyApiKey).",
+        "tags": [
+          "QMS"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "title",
+                  "description"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "LOW",
+                      "MEDIUM",
+                      "HIGH",
+                      "CRITICAL"
+                    ]
+                  },
+                  "deviceId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "dateIdentified": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "rootCause": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Non-conformance created"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      },
+      "get": {
+        "summary": "List non-conformances",
+        "description": "Returns non-conformance records. Requires authentication.",
+        "tags": [
+          "QMS"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter by status"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of non-conformances"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/qms/nc/{id}": {
+      "patch": {
+        "summary": "Update a non-conformance",
+        "description": "Updates a non-conformance record. Requires authentication. Scoped API keys are rejected (denyApiKey).",
+        "tags": [
+          "QMS"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Non-conformance ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "LOW",
+                      "MEDIUM",
+                      "HIGH",
+                      "CRITICAL"
+                    ]
+                  },
+                  "rootCause": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Non-conformance updated"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Non-conformance not found"
+          }
+        }
+      }
+    },
+    "/api/v1/qms/capa": {
+      "post": {
+        "summary": "Create a CAPA",
+        "description": "Creates a corrective/preventive action record. Requires authentication. Scoped API keys are rejected (denyApiKey).",
+        "tags": [
+          "QMS"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "ncId",
+                  "title",
+                  "actionPlan"
+                ],
+                "properties": {
+                  "ncId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "actionPlan": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "assignedTo": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "dueDate": {
+                    "type": "string",
+                    "format": "date"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "CAPA created"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      },
+      "get": {
+        "summary": "List CAPAs",
+        "description": "Returns corrective/preventive action records. Requires authentication.",
+        "tags": [
+          "QMS"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter by status"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of CAPAs"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/qms/capa/{id}": {
+      "patch": {
+        "summary": "Update a CAPA",
+        "description": "Updates a corrective/preventive action record. Requires authentication. Scoped API keys are rejected (denyApiKey).",
+        "tags": [
+          "QMS"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "CAPA ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "actionPlan": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "assignedTo": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "dueDate": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "completedDate": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "approvedBy": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "verificationNotes": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "CAPA updated"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "CAPA not found"
           }
         }
       }
@@ -8189,6 +9733,275 @@
         "responses": {
           "200": {
             "description": "Report generated"
+          }
+        }
+      }
+    },
+    "/api/v1/risk": {
+      "post": {
+        "summary": "Create risk",
+        "description": "Creates a new risk in the tenant's risk register. Requires authentication.",
+        "tags": [
+          "Risk"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "title"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "type": "string"
+                  },
+                  "severity": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5
+                  },
+                  "likelihood": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5
+                  },
+                  "mitigationPlan": {
+                    "type": "string"
+                  },
+                  "assignedTo": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "dueDate": {
+                    "type": "string",
+                    "format": "date"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Risk created successfully"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      },
+      "get": {
+        "summary": "List risks",
+        "description": "Returns the tenant's risk register. Requires authentication.",
+        "tags": [
+          "Risk"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Risks retrieved successfully"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/risk/{id}": {
+      "get": {
+        "summary": "Get one risk",
+        "description": "Returns a single risk by id. Requires authentication.",
+        "tags": [
+          "Risk"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Risk retrieved successfully"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Risk not found"
+          }
+        }
+      },
+      "put": {
+        "summary": "Update risk",
+        "description": "Updates an existing risk. Requires authentication.",
+        "tags": [
+          "Risk"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "type": "string"
+                  },
+                  "severity": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5
+                  },
+                  "likelihood": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5
+                  },
+                  "mitigationPlan": {
+                    "type": "string"
+                  },
+                  "assignedTo": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "dueDate": {
+                    "type": "string",
+                    "format": "date"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Risk updated successfully"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Risk not found"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete risk",
+        "description": "Deletes a risk by id. Requires authentication.",
+        "tags": [
+          "Risk"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Risk deleted successfully"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Risk not found"
           }
         }
       }
@@ -9299,6 +11112,289 @@
           "SCIM"
         ],
         "summary": "Partially update a user (e.g. deactivate)"
+      },
+      "delete": {
+        "summary": "De-provision a user",
+        "description": "Deletes a SCIM-provisioned user.",
+        "tags": [
+          "SCIM"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User de-provisioned"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "User not found"
+          }
+        }
+      }
+    },
+    "/api/v1/scim/v2/Groups": {
+      "get": {
+        "summary": "Get all provisioned groups",
+        "description": "Returns a list of SCIM-provisioned groups.",
+        "tags": [
+          "SCIM"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of groups"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "summary": "Provision a new group",
+        "description": "Creates a new SCIM group.",
+        "tags": [
+          "SCIM"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "members": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Group provisioned"
+          },
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/scim/v2/Groups/{id}": {
+      "get": {
+        "summary": "Get a specific group",
+        "description": "Returns a single SCIM-provisioned group by id.",
+        "tags": [
+          "SCIM"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The requested group"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Group not found"
+          }
+        }
+      },
+      "put": {
+        "summary": "Update a group completely",
+        "description": "Replaces a SCIM group with the supplied representation.",
+        "tags": [
+          "SCIM"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "members": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Group updated"
+          },
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Group not found"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Partially update a group",
+        "description": "Applies SCIM PATCH operations to a group (e.g. add or remove members).",
+        "tags": [
+          "SCIM"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "Operations": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Group updated"
+          },
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Group not found"
+          }
+        }
+      },
+      "delete": {
+        "summary": "De-provision a group",
+        "description": "Deletes a SCIM-provisioned group.",
+        "tags": [
+          "SCIM"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Group de-provisioned"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Group not found"
+          }
+        }
       }
     },
     "/api/v1/search": {
@@ -9687,6 +11783,165 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/sop": {
+      "post": {
+        "summary": "Create an SOP document",
+        "description": "Creates a standard operating procedure document. Requires authentication.",
+        "tags": [
+          "SOP"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "title"
+                ],
+                "properties": {
+                  "documentNumber": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "string"
+                  },
+                  "contentUrl": {
+                    "type": "string"
+                  },
+                  "requiresTraining": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "SOP document created"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      },
+      "get": {
+        "summary": "List SOP documents",
+        "description": "Returns standard operating procedure documents. Requires authentication.",
+        "tags": [
+          "SOP"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter by status"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of SOP documents"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/sop/{id}/publish": {
+      "patch": {
+        "summary": "Publish an SOP and assign training",
+        "description": "Publishes a standard operating procedure and assigns training. Requires authentication.",
+        "tags": [
+          "SOP"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "SOP document ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SOP published"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "SOP document not found"
+          }
+        }
+      }
+    },
+    "/api/v1/sop/{id}/acknowledge": {
+      "post": {
+        "summary": "Acknowledge SOP training",
+        "description": "Records acknowledgement of SOP training for the authenticated user. Requires authentication.",
+        "tags": [
+          "SOP"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "SOP document ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Training acknowledged"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "SOP document not found"
           }
         }
       }
@@ -10978,6 +13233,257 @@
         }
       }
     },
+    "/api/v1/supplier-scorecard": {
+      "post": {
+        "summary": "Create scorecard",
+        "description": "Creates a new supplier scorecard. Requires authentication.",
+        "tags": [
+          "SupplierScorecard"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "vendorId",
+                  "evaluationDate"
+                ],
+                "properties": {
+                  "vendorId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "evaluationDate": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "qualityScore": {
+                    "type": "integer"
+                  },
+                  "deliveryScore": {
+                    "type": "integer"
+                  },
+                  "serviceScore": {
+                    "type": "integer"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "comments": {
+                    "type": "string"
+                  },
+                  "nextEvaluationDate": {
+                    "type": "string",
+                    "format": "date"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Scorecard created successfully"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      },
+      "get": {
+        "summary": "List scorecards",
+        "description": "Returns the tenant's supplier scorecards. Requires authentication.",
+        "tags": [
+          "SupplierScorecard"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "vendorId",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scorecards retrieved successfully"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/supplier-scorecard/{id}": {
+      "get": {
+        "summary": "Get one scorecard",
+        "description": "Returns a single supplier scorecard by id. Requires authentication.",
+        "tags": [
+          "SupplierScorecard"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scorecard retrieved successfully"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Scorecard not found"
+          }
+        }
+      },
+      "put": {
+        "summary": "Update scorecard",
+        "description": "Updates an existing supplier scorecard. Requires authentication.",
+        "tags": [
+          "SupplierScorecard"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "vendorId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "evaluationDate": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "qualityScore": {
+                    "type": "integer"
+                  },
+                  "deliveryScore": {
+                    "type": "integer"
+                  },
+                  "serviceScore": {
+                    "type": "integer"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "comments": {
+                    "type": "string"
+                  },
+                  "nextEvaluationDate": {
+                    "type": "string",
+                    "format": "date"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Scorecard updated successfully"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Scorecard not found"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete scorecard",
+        "description": "Deletes a supplier scorecard by id. Requires authentication.",
+        "tags": [
+          "SupplierScorecard"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scorecard deleted successfully"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Scorecard not found"
+          }
+        }
+      }
+    },
     "/api/v1/tenants/all": {
       "get": {
         "summary": "Retrieve a paginated list of tenants",
@@ -11980,7 +14486,7 @@
         "summary": "Create a backup for a tenant",
         "description": "Requires SUPER_ADMIN or TENANT_ADMIN role with tenant:update permission. Creates a ZIP file containing tenant data (settings, roles, features, users, permissions).",
         "tags": [
-          "Tenant Backups"
+          "TenantBackup"
         ],
         "security": [
           {
@@ -12135,7 +14641,7 @@
         "summary": "Get all backups for a tenant",
         "description": "Requires SUPER_ADMIN or TENANT_ADMIN role with tenant:read permission. Returns paginated list of backups with status, size, and metadata.",
         "tags": [
-          "Tenant Backups"
+          "TenantBackup"
         ],
         "security": [
           {
@@ -12300,7 +14806,7 @@
         "summary": "Get backup statistics for a tenant",
         "description": "Requires SUPER_ADMIN or TENANT_ADMIN role with tenant:read permission. Returns totals, completed/failed counts, total size, and the latest backup.",
         "tags": [
-          "Tenant Backups"
+          "TenantBackup"
         ],
         "security": [
           {
@@ -12333,7 +14839,7 @@
         "summary": "Get details of a specific backup",
         "description": "Requires SUPER_ADMIN or TENANT_ADMIN role with tenant:read permission. Returns detailed information about a specific backup including creator, size, and metadata.",
         "tags": [
-          "Tenant Backups"
+          "TenantBackup"
         ],
         "security": [
           {
@@ -12458,7 +14964,7 @@
         "summary": "Delete a backup",
         "description": "Requires SUPER_ADMIN or TENANT_ADMIN role with tenant:delete permission. Deletes the backup file and record.",
         "tags": [
-          "Tenant Backups"
+          "TenantBackup"
         ],
         "security": [
           {
@@ -12566,7 +15072,7 @@
         "summary": "Download a backup file",
         "description": "Requires SUPER_ADMIN or TENANT_ADMIN role with tenant:read permission. Downloads the ZIP file containing the backup data.",
         "tags": [
-          "Tenant Backups"
+          "TenantBackup"
         ],
         "security": [
           {
@@ -12685,7 +15191,7 @@
         "summary": "Restore a backup for a tenant",
         "description": "Requires SUPER_ADMIN or TENANT_ADMIN role with tenant:update permission. Restores tenant data from a backup. Can optionally merge with existing data.",
         "tags": [
-          "Tenant Backups"
+          "TenantBackup"
         ],
         "security": [
           {
@@ -13422,6 +15928,282 @@
           },
           "401": {
             "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/status": {
+      "get": {
+        "summary": "Get lifecycle status",
+        "description": "Returns the lifecycle status of the tenant.",
+        "tags": [
+          "TenantLifecycle"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lifecycle status returned"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/suspend": {
+      "post": {
+        "summary": "Suspend tenant",
+        "description": "Suspends the tenant. Super admin only.",
+        "tags": [
+          "TenantLifecycle"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tenant suspended"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/resume": {
+      "post": {
+        "summary": "Resume tenant",
+        "description": "Resumes the tenant. Super admin only.",
+        "tags": [
+          "TenantLifecycle"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tenant resumed"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/grace-period": {
+      "post": {
+        "summary": "Start grace period",
+        "description": "Starts the grace period for the tenant. Super admin only.",
+        "tags": [
+          "TenantLifecycle"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Grace period started"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/offboard": {
+      "post": {
+        "summary": "Offboard tenant (schedule deletion)",
+        "description": "Schedules deletion of the tenant. Super admin only.",
+        "tags": [
+          "TenantLifecycle"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "force": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tenant offboarding scheduled"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/offboard/cancel": {
+      "post": {
+        "summary": "Cancel offboarding",
+        "description": "Cancels a scheduled offboarding for the tenant. Super admin only.",
+        "tags": [
+          "TenantLifecycle"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Offboarding cancelled"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/export": {
+      "get": {
+        "summary": "Export all tenant data",
+        "description": "Exports all data for the tenant. Super admin only.",
+        "tags": [
+          "TenantLifecycle"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tenant data exported"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
           }
         }
       }
@@ -15613,6 +18395,144 @@
           },
           "404": {
             "description": "Location not found"
+          }
+        }
+      }
+    },
+    "/api/v1/webauthn/registration-options": {
+      "post": {
+        "summary": "Get WebAuthn registration options",
+        "description": "Returns the options needed to begin a WebAuthn passkey registration.",
+        "tags": [
+          "WebAuthn"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Registration options"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/webauthn/verify-registration": {
+      "post": {
+        "summary": "Verify a WebAuthn registration",
+        "description": "Verifies the attestation response from a WebAuthn registration ceremony.",
+        "tags": [
+          "WebAuthn"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "WebAuthn attestation response object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Registration verified"
+          },
+          "400": {
+            "description": "Invalid attestation"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/webauthn/login-options": {
+      "post": {
+        "summary": "Get WebAuthn login options",
+        "description": "Returns the assertion options needed to begin a WebAuthn login ceremony.",
+        "tags": [
+          "WebAuthn"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Login/assertion options"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/webauthn/verify-login": {
+      "post": {
+        "summary": "Verify a WebAuthn assertion",
+        "description": "Verifies the assertion response from a WebAuthn login ceremony.",
+        "tags": [
+          "WebAuthn"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "WebAuthn assertion response object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Assertion verified"
+          },
+          "400": {
+            "description": "Invalid assertion"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/webauthn/disable": {
+      "post": {
+        "summary": "Disable WebAuthn",
+        "description": "Disables WebAuthn passkey authentication for the current user.",
+        "tags": [
+          "WebAuthn"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "WebAuthn disabled"
+          },
+          "401": {
+            "description": "Unauthorized"
           }
         }
       }

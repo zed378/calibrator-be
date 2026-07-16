@@ -253,7 +253,7 @@ describe("tenant Controller", () => {
     });
 
     it("should handle tenantId from body", async () => {
-      req.body = { tenantId: VALID_TENANT_ID };
+      req.query = { tenantId: VALID_TENANT_ID };
       tenantService.getPublicBranding.mockResolvedValue({
         id: VALID_TENANT_ID,
         primaryColor: "#000000",

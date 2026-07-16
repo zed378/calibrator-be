@@ -121,5 +121,62 @@ describe("sessionCleanup.middleware", () => {
       expect(typeof result.cleanupExpiredSessions).toBe("function");
       expect(typeof result.revokeUserSessions).toBe("function");
     });
+
+    it("should log default message for default schedule", () => {
+      const { logger } = require("../../middlewares/activityLog.middleware");
+      initSessionCleanup();
+
+      expect(logger.info).toHaveBeenCalledWith(
+        "Session cleanup scheduled at 2:00 AM daily",
+      );
+    });
+
+    it("should log custom message when schedule differs from default", () => {
+      process.env.SESSION_CLEANUP_SCHEDULER = "30 3 * * *";
+      const { logger } = require("../../middlewares/activityLog.middleware");
+      initSessionCleanup();
+
+      expect(logger.info).toHaveBeenCalledWith(
+        "Session cleanup scheduled with: 30 3 * * *",
+      );
+    });
+
+    it("should call cleanupExpiredSessionsJob and log success when cron fires", async () => {
+      const { logger } = require("../../middlewares/activityLog.middleware");
+      const {
+        cleanupExpiredSessions,
+      } = require("../../services/session.service");
+      cleanupExpiredSessions.mockResolvedValue(10);
+
+      const cron = require("node-cron");
+      initSessionCleanup();
+      const scheduleCallback = cron.schedule.mock.calls[0][1];
+      await scheduleCallback();
+
+      expect(logger.info).toHaveBeenCalledWith("Running session cleanup...");
+      expect(logger.info).toHaveBeenCalledWith(
+        "Session cleanup completed successfully",
+      );
+    });
+
+    it("should log error and not rethrow when cron callback catches failure", async () => {
+      const { logger } = require("../../middlewares/activityLog.middleware");
+      const {
+        cleanupExpiredSessions,
+      } = require("../../services/session.service");
+      cleanupExpiredSessions.mockRejectedValue(
+        new Error("Connection refused"),
+      );
+
+      const cron = require("node-cron");
+      initSessionCleanup();
+      const scheduleCallback = cron.schedule.mock.calls[0][1];
+
+      await expect(scheduleCallback()).resolves.not.toThrow();
+
+      expect(logger.error).toHaveBeenCalledWith(
+        "Error during scheduled session cleanup: Connection refused",
+      );
+    });
   });
 });

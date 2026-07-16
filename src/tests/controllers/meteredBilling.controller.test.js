@@ -3,16 +3,14 @@
  */
 
 jest.mock("../../services/meteredBilling.service", () => ({
-  meteredBillingService: {
-    getTenantUsage: jest.fn(),
-    getBillingHistory: jest.fn(),
-    estimateCost: jest.fn(),
-    getPlanDetails: jest.fn(),
-    getUsageAlerts: jest.fn(),
-    createUsageAlert: jest.fn(),
-    deleteUsageAlert: jest.fn(),
-    getAnalytics: jest.fn(),
-  },
+  getTenantUsage: jest.fn(),
+  getBillingHistory: jest.fn(),
+  estimateCost: jest.fn(),
+  getPlanDetails: jest.fn(),
+  getUsageAlerts: jest.fn(),
+  createUsageAlert: jest.fn(),
+  deleteUsageAlert: jest.fn(),
+  getAnalytics: jest.fn(),
 }));
 
 jest.mock("../../utils/response.util", () => ({
@@ -20,9 +18,7 @@ jest.mock("../../utils/response.util", () => ({
   error: jest.fn(),
 }));
 
-const {
-  meteredBillingService,
-} = require("../../services/meteredBilling.service");
+const meteredBillingService = require("../../services/meteredBilling.service");
 const meteredBillingController = require("../../controllers/meteredBilling.controller");
 const { success, error } = require("../../utils/response.util");
 

@@ -17,6 +17,10 @@ const { Webhook, WebhookDelivery } = require("../models");
 const { AppError } = require("../utils/appError.util");
 const { DEFAULT_LIMIT, MAX_LIMIT } = require("../constants");
 const { logger } = require("../middlewares/activityLog.middleware");
+const {
+  assertSafeUrl,
+  assertResolvedHostIsPublic,
+} = require("../utils/ssrf.util");
 
 const MAX_ATTEMPTS = Number(process.env.WEBHOOK_MAX_ATTEMPTS) || 5;
 const TIMEOUT_MS = Number(process.env.WEBHOOK_TIMEOUT_MS) || 8000;
@@ -43,6 +47,8 @@ exports.createWebhook = async (tenantId, { url, events, description, isActive, s
   if (!url) {
     throw new AppError(400, "url is required");
   }
+  // SSRF: reject internal/loopback/link-local/metadata targets at registration.
+  assertSafeUrl(url);
   if (!Array.isArray(events) || events.length === 0) {
     throw new AppError(400, "events must be a non-empty array");
   }
@@ -96,6 +102,10 @@ exports.updateWebhook = async (tenantId, id, data) => {
       patch[k] = data[k];
     }
   }
+  // SSRF: re-validate the target if the URL is being changed.
+  if (patch.url !== undefined) {
+    assertSafeUrl(patch.url);
+  }
   if (patch.events && (!Array.isArray(patch.events) || patch.events.length === 0)) {
     throw new AppError(400, "events must be a non-empty array");
   }
@@ -141,6 +151,11 @@ const attemptDelivery = async (webhook, delivery) => {
   };
   const body = JSON.stringify(bodyObj);
   const signature = sign(webhook.secret, body);
+
+  // SSRF backstop: resolve the host and block internal addresses immediately
+  // before dispatch (defends against a hostname that resolves internally, or
+  // DNS records changed after registration).
+  await assertResolvedHostIsPublic(webhook.url);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);

@@ -45,6 +45,9 @@ function getMenuGroupId(slug) {
     "webauthn": "a0000000-0000-0000-0000-000000000216",
     "network-security": "a0000000-0000-0000-0000-000000000217",
     "scim": "a0000000-0000-0000-0000-000000000218",
+    "risk": "a0000000-0000-0000-0000-000000000219",
+    "supplier-scorecard": "a0000000-0000-0000-0000-000000000220",
+    "predictive-maintenance": "a0000000-0000-0000-0000-000000000306",
   };
   if (ids[slug]) {
     return ids[slug];
@@ -244,6 +247,22 @@ async function seedMenuGroups() {
       parentSlug: "management",
     },
     {
+      name: "Risk Register",
+      slug: "risk",
+      icon: "ShieldAlert",
+      sortOrder: 14,
+      is_active: true,
+      parentSlug: "management",
+    },
+    {
+      name: "Supplier Scorecards",
+      slug: "supplier-scorecard",
+      icon: "ClipboardCheck",
+      sortOrder: 15,
+      is_active: true,
+      parentSlug: "management",
+    },
+    {
       name: "OIDC Provider",
       slug: "oidc",
       icon: "Lock",
@@ -314,6 +333,14 @@ async function seedMenuGroups() {
       slug: "reports",
       icon: "BarChart3",
       sortOrder: 4,
+      is_active: true,
+      parentSlug: "equipment",
+    },
+    {
+      name: "Predictive Maintenance",
+      slug: "predictive-maintenance",
+      icon: "Activity",
+      sortOrder: 5,
       is_active: true,
       parentSlug: "equipment",
     },
@@ -496,6 +523,9 @@ async function seedRoleMenuPermissions() {
         "webauthn",
         "network-security",
         "scim",
+        "risk",
+        "supplier-scorecard",
+        "predictive-maintenance",
       ],
     },
     {
@@ -526,6 +556,9 @@ async function seedRoleMenuPermissions() {
         "webauthn",
         "network-security",
         "scim",
+        "risk",
+        "supplier-scorecard",
+        "predictive-maintenance",
       ],
     },
     {
@@ -552,6 +585,9 @@ async function seedRoleMenuPermissions() {
         "feature-flags",
         "tenant-lifecycle",
         "data-retention",
+        "risk",
+        "supplier-scorecard",
+        "predictive-maintenance",
       ],
     },
     {

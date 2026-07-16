@@ -408,14 +408,22 @@ async function hardDeleteUser(tenantId, userId) {
 async function logErasureRequest(tenantId, userId, hardDelete, anonymize) {
   const { AuditLog } = require("../models");
 
+  // Map onto the actual AuditLog schema: `action` is an ENUM
+  // (CREATE|UPDATE|DELETE|LOGIN|APPROVE|EXPORT) and before/after live under
+  // the `changes` JSONB column. Using an out-of-enum action or non-existent
+  // columns (the previous "GDPR_ERASURE"/entityType/before/after) would fail
+  // the insert and silently drop the erasure audit record.
   await AuditLog.create({
     tenantId,
     userId: null,
-    action: "GDPR_ERASURE",
-    entityType: "User",
-    entityId: userId,
-    before: { userId, hardDelete, anonymize },
-    after: { erasedAt: new Date().toISOString() },
+    action: "DELETE",
+    resourceType: "User",
+    resourceId: userId,
+    changes: {
+      reason: "GDPR_ERASURE",
+      before: { userId, hardDelete, anonymize },
+      after: { erasedAt: new Date().toISOString() },
+    },
   });
 }
 
@@ -531,6 +539,143 @@ exports.getConsentHistory = async (tenantId, userId) => {
     });
     return [];
   }
+};
+
+/**
+ * Update consent across one or more categories in a single call.
+ * consent=true grants each category; consent=false withdraws each.
+ * @param {string} tenantId
+ * @param {string} userId
+ * @param {string[]} categories
+ * @param {boolean} consent
+ * @param {string} [ip]
+ */
+exports.updateConsent = async (tenantId, userId, categories, consent, ip = "") => {
+  if (!isGdprEnabled()) {
+    throw new AppError(400, "Consent management is disabled");
+  }
+  if (!Array.isArray(categories) || categories.length === 0) {
+    throw new AppError(400, "categories must be a non-empty array");
+  }
+  if (typeof consent !== "boolean") {
+    throw new AppError(400, "consent must be a boolean");
+  }
+
+  for (const purpose of categories) {
+    if (consent) {
+      await exports.recordConsent(tenantId, userId, purpose, "1.0", ip);
+    } else {
+      await exports.withdrawConsent(tenantId, userId, purpose);
+    }
+  }
+
+  return { updated: categories.length, consent, categories };
+};
+
+// ==========================================
+// PROCESSING ACTIVITIES / RECTIFICATION / RESTRICTION
+// ==========================================
+
+/**
+ * Records of processing activities (GDPR Article 30). Returns the disclosure of
+ * how the platform processes the subject's personal data.
+ */
+exports.getProcessingActivities = async (tenantId, userId) => {
+  return {
+    controller: "Hospital Device Calibration Platform",
+    tenantId,
+    subjectId: userId,
+    generatedAt: new Date().toISOString(),
+    activities: [
+      {
+        purpose: "Account & authentication",
+        legalBasis: "Contract",
+        dataCategories: ["identity", "credentials", "session metadata"],
+        retention: "Life of the account",
+      },
+      {
+        purpose: "Calibration & maintenance records",
+        legalBasis: "Legal obligation (ISO 17025)",
+        dataCategories: ["device", "measurements", "operator identity"],
+        retention: "Per data-retention policy",
+      },
+      {
+        purpose: "Audit trail",
+        legalBasis: "Legal obligation (FDA 21 CFR Part 11)",
+        dataCategories: ["actor", "action", "timestamp", "ip address"],
+        retention: "At least the lifetime of the underlying record",
+      },
+      {
+        purpose: "Notifications",
+        legalBasis: "Legitimate interest",
+        dataCategories: ["contact details"],
+        retention: "Per data-retention policy",
+      },
+      {
+        purpose: "Billing & subscription",
+        legalBasis: "Contract",
+        dataCategories: ["subscription", "invoices"],
+        retention: "Statutory financial retention period",
+      },
+    ],
+  };
+};
+
+/**
+ * Rectify a personal-data field (GDPR Article 16). Only a whitelist of
+ * self-service profile fields may be changed here.
+ */
+exports.rectifyData = async (tenantId, userId, field, value) => {
+  if (!isGdprEnabled()) {
+    throw new AppError(400, "Rectification is disabled");
+  }
+  const ALLOWED_FIELDS = ["firstName", "lastName", "phone", "email"];
+  if (!ALLOWED_FIELDS.includes(field)) {
+    throw new AppError(
+      400,
+      `Field "${field}" cannot be rectified. Allowed: ${ALLOWED_FIELDS.join(", ")}`,
+    );
+  }
+
+  const { User, AuditLog } = require("../models");
+  const [count] = await User.update(
+    { [field]: value },
+    { where: { id: userId, tenantId } },
+  );
+  if (count === 0) {
+    throw new AppError(404, "User not found");
+  }
+
+  try {
+    await AuditLog.create({
+      tenantId,
+      userId,
+      action: "UPDATE",
+      resourceType: "User",
+      resourceId: userId,
+      changes: { reason: "GDPR_RECTIFICATION", field, after: value },
+    });
+  } catch (err) {
+    logger.warn("Failed to audit rectification", { error: err.message });
+  }
+
+  logger.info("Personal data rectified", { tenantId, userId, field });
+  return { rectified: true, field };
+};
+
+/**
+ * Restrict processing (GDPR Article 18). Recorded as a DSAR of type
+ * "restriction" for the compliance team to act on.
+ */
+exports.restrictProcessing = async (tenantId, userId, reason) => {
+  if (!isGdprEnabled()) {
+    throw new AppError(400, "Processing restriction is disabled");
+  }
+  const dsar = await exports.createDsar(tenantId, userId, "restriction", {
+    reason: reason || null,
+  });
+  logger.info("Processing restriction requested", { tenantId, userId });
+  return { restricted: true, requestId: dsar.dsarId };
 };
 
 // ==========================================

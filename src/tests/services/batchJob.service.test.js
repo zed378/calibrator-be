@@ -12,20 +12,21 @@ jest.mock("../../models", () => ({
   },
 }));
 
-jest.mock(
-  "../../utils/appError.util",
-  () =>
-    class AppError extends Error {
+jest.mock("../../utils/appError.util", () => {
+  console.log("[appError MOCK FACTORY]");
+  return {
+    AppError: class AppError extends Error {
       constructor(status, message) {
         super(message);
         this.status = status;
       }
     },
-);
+  };
+});
 
 const batchJobService = require("../../services/batchJob.service");
 const { BatchJob } = require("../../models");
-const AppError = require("../../utils/appError.util");
+const { AppError } = require("../../utils/appError.util");
 
 describe("batchJobService", () => {
   beforeEach(() => {
@@ -206,7 +207,10 @@ describe("batchJobService", () => {
   });
 
   describe("simulateProcessing", () => {
-    it.skip("should update job status to PROCESSING immediately after start", async () => {
+    it("should update job status to PROCESSING immediately after start", async () => {
+      // Set up fake timers for the test
+      jest.useFakeTimers();
+      
       const jobId = "job-1";
       const mockJob = {
         id: jobId,
@@ -225,11 +229,19 @@ describe("batchJobService", () => {
       // Advance past the initial setTimeout (1000ms) to trigger the callback
       jest.advanceTimersByTime(1001);
 
+      // Run all pending timers including async callbacks
+      await jest.runAllTimersAsync();
+
       expect(BatchJob.findByPk).toHaveBeenCalledWith(jobId);
       expect(mockJob.save).toHaveBeenCalled();
+      
+      // Clean up fake timers
+      jest.useRealTimers();
     });
 
     it("should complete job after processing all items", async () => {
+      jest.useFakeTimers();
+      
       const jobId = "job-1";
       const totalItems = 2;
       const mockJob = {
@@ -257,9 +269,13 @@ describe("batchJobService", () => {
       // Check that job was updated with COMPLETED status
       const saveCalls = mockJob.save.mock.calls;
       const lastCall = saveCalls[saveCalls.length - 1];
+      
+      jest.useRealTimers();
     });
 
     it("should handle job deletion during processing", async () => {
+      jest.useFakeTimers();
+      
       const jobId = "job-1";
 
       // First call returns job, subsequent calls return null
@@ -278,9 +294,13 @@ describe("batchJobService", () => {
 
       // Should not throw error when job is deleted
       expect(() => jest.advanceTimersByTime(1000)).not.toThrow();
+      
+      jest.useRealTimers();
     });
 
     it("should handle job failure during processing", async () => {
+      jest.useFakeTimers();
+      
       const jobId = "job-1";
       const mockJob = {
         id: jobId,
@@ -298,6 +318,8 @@ describe("batchJobService", () => {
 
       // Should not throw error
       expect(() => jest.advanceTimersByTime(1000)).not.toThrow();
+      
+      jest.useRealTimers();
     });
   });
 });

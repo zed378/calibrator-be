@@ -3,15 +3,13 @@
  */
 
 jest.mock("../../services/customDomains.service", () => ({
-  customDomainsService: {
-    getTenantDomains: jest.fn(),
-    addDomain: jest.fn(),
-    verifyDomain: jest.fn(),
-    removeDomain: jest.fn(),
-    getDomainStatus: jest.fn(),
-    setDefaultDomain: jest.fn(),
-    getDnsRecords: jest.fn(),
-  },
+  getTenantDomains: jest.fn(),
+  addDomain: jest.fn(),
+  verifyDomain: jest.fn(),
+  removeDomain: jest.fn(),
+  getDomainStatus: jest.fn(),
+  setDefaultDomain: jest.fn(),
+  getDnsRecords: jest.fn(),
 }));
 
 jest.mock("../../utils/response.util", () => ({
@@ -19,9 +17,7 @@ jest.mock("../../utils/response.util", () => ({
   error: jest.fn(),
 }));
 
-const {
-  customDomainsService,
-} = require("../../services/customDomains.service");
+const customDomainsService = require("../../services/customDomains.service");
 const customDomainsController = require("../../controllers/customDomains.controller");
 const { success, error } = require("../../utils/response.util");
 

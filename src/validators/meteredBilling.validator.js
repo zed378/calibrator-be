@@ -63,3 +63,30 @@ exports.validate = (data, schema) => {
   }
   return value;
 };
+
+/**
+ * Express middleware factory that validates a request `source` (body/query)
+ * against a Joi schema. The Joi schemas above are NOT Express middleware — their
+ * `.validate` is Joi's `(value, options)` method — so routes must wrap them here.
+ */
+const validateSource = (schema, source, reassign) => (req, res, next) => {
+  const { error, value } = schema.validate(req[source] || {});
+  if (error) {
+    const err = new Error(formatErrors(error.details));
+    err.status = 400;
+    err.statusCode = 400;
+    return next(err);
+  }
+  if (reassign) {
+    // req.query is a read-only getter in Express 5; body is safe to normalize.
+    try {
+      req[source] = value;
+    } catch {
+      /* ignore read-only source */
+    }
+  }
+  next();
+};
+
+exports.validateBody = (schema) => validateSource(schema, "body", true);
+exports.validateQuery = (schema) => validateSource(schema, "query", false);

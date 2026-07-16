@@ -412,7 +412,7 @@ describe("roles Controller", () => {
         data: expect.objectContaining({
           id: "mg-new",
           name: "Reports",
-        },
+        }),
       });
     });
   });
@@ -424,6 +424,7 @@ describe("roles Controller", () => {
         name: "Dashboard",
         icon: "settings"
       };
+      req.params = { id: "mg-1" };
       jest.spyOn(rolesService, 'updateMenu').mockReturnValueOnce(menuMock);
 
       await rolesController.updateMenu(req, res, next);
@@ -433,13 +434,14 @@ describe("roles Controller", () => {
         success: true,
         data: expect.objectContaining({
           id: "mg-1",
-        },
+        }),
       });
     });
   });
 
   describe("deleteMenu", () => {
     it("should delete a menu group", async () => {
+      req.params = { id: "mg-1" };
       jest.spyOn(rolesService, 'deleteMenu').mockReturnValueOnce({ message: "Menu group deleted" });
 
       await rolesController.deleteMenu(req, res, next);

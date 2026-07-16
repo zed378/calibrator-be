@@ -3,9 +3,25 @@ const { AppError } = require('../utils/appError.util');
 const { logger } = require('../middlewares/activityLog.middleware');
 
 // In production, this would be retrieved from AWS KMS, Azure Key Vault, etc.
-// We use a local 32-byte hex master key for development.
+// We use a local 32-byte hex master key for development only.
+//
+// SECURITY: refuse to boot in production with the well-known development master
+// key. Otherwise every tenant secret (SSO cert, OIDC/Stripe/webhook secrets)
+// would be protected by a key that is public in the source tree.
+const isProduction = process.env.NODE_ENV === 'production';
+if (isProduction && !process.env.KMS_MASTER_KEY) {
+  throw new Error(
+    'KMS_MASTER_KEY must be set in production (64-char hex / 32-byte key). ' +
+      'Refusing to start with the insecure development master key.',
+  );
+}
 const MASTER_KEY_HEX = process.env.KMS_MASTER_KEY || crypto.createHash('sha256').update('local-kms-mock-key').digest('hex');
 const MASTER_KEY = Buffer.from(MASTER_KEY_HEX, 'hex');
+if (MASTER_KEY.length !== 32) {
+  throw new Error(
+    `KMS_MASTER_KEY must decode to 32 bytes (got ${MASTER_KEY.length}); provide a 64-character hex string.`,
+  );
+}
 
 /**
  * Encrypt a Data Encryption Key (DEK) with the KMS Master Key

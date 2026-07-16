@@ -1,5 +1,5 @@
 const { BatchJob } = require("../models");
-const AppError = require("../utils/appError.util");
+const { AppError } = require("../utils/appError.util");
 
 // In a real application, you would import a queue publisher (like RabbitMQ channel)
 // const { publishToQueue } = require("./rabbitmq.service");

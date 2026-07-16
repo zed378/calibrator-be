@@ -20,12 +20,13 @@ const {
   deleteUsageAlert,
   getAnalytics,
 } = require("../../controllers/meteredBilling.controller");
+const meteredValidator = require("../../validators/meteredBilling.validator");
 const {
   createUsageAlert: createAlertValidator,
   estimateCost: estimateCostValidator,
   getAnalytics: getAnalyticsValidator,
   getBillingHistory: billingHistoryValidator,
-} = require("../../validators/meteredBilling.validator");
+} = meteredValidator;
 const { validateUuid } = require("../../middlewares/validateUuid.middleware");
 
 // All routes require authentication and billing permissions
@@ -103,7 +104,7 @@ router.get("/usage", auth, getUsageMetrics);
 router.get(
   "/history",
   auth,
-  billingHistoryValidator.validate,
+  meteredValidator.validateQuery(billingHistoryValidator),
   getBillingHistory,
 );
 
@@ -152,7 +153,12 @@ router.get(
  *       401:
  *         description: Unauthorized
  */
-router.post("/estimate", auth, estimateCostValidator.validate, estimateCost);
+router.post(
+  "/estimate",
+  auth,
+  meteredValidator.validateBody(estimateCostValidator),
+  estimateCost,
+);
 
 /**
  * @swagger
@@ -255,7 +261,12 @@ router.get("/alerts", auth, getUsageAlerts);
  *       401:
  *         description: Unauthorized
  */
-router.post("/alerts", auth, createAlertValidator.validate, createUsageAlert);
+router.post(
+  "/alerts",
+  auth,
+  meteredValidator.validateBody(createAlertValidator),
+  createUsageAlert,
+);
 
 /**
  * @swagger
@@ -325,6 +336,11 @@ router.delete(
  *       401:
  *         description: Unauthorized
  */
-router.get("/analytics", auth, getAnalyticsValidator.validate, getAnalytics);
+router.get(
+  "/analytics",
+  auth,
+  meteredValidator.validateQuery(getAnalyticsValidator),
+  getAnalytics,
+);
 
 module.exports = router;

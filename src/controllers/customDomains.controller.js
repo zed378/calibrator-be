@@ -4,7 +4,10 @@
  * Handles custom domain and vanity subdomain endpoints.
  */
 
-const { customDomainsService } = require("../services/customDomains.service");
+// The service exports its functions at the top level, so import the module
+// object — NOT `{ customDomainsService }` (which was undefined and made every
+// endpoint throw at runtime).
+const customDomainsService = require("../services/customDomains.service");
 const { success, error } = require("../utils/response.util");
 const { asyncHandler } = require("../utils/controllerWrapper.util");
 const { logger } = require("../middlewares/activityLog.middleware");
@@ -33,7 +36,7 @@ exports.addCustomDomain = asyncHandler(async (req, res) => {
     sslEnabled: sslEnabled !== false,
   });
 
-  return success(res, result, 201, "Custom domain added");
+  return success(res, result, null, "Custom domain added", 201);
 });
 
 /**

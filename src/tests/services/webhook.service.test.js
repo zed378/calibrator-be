@@ -18,6 +18,15 @@ jest.mock("../../middlewares/activityLog.middleware", () => ({
   logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
 }));
 
+// SSRF guards do real URL parsing / DNS resolution; neutralize them here so
+// these tests exercise delivery/retry logic (SSRF logic is covered separately
+// in tests/utils/ssrf.util.test.js).
+jest.mock("../../utils/ssrf.util", () => ({
+  assertSafeUrl: jest.fn(),
+  assertResolvedHostIsPublic: jest.fn().mockResolvedValue(undefined),
+  isBlockedIp: jest.fn(),
+}));
+
 const webhookService = require("../../services/webhook.service");
 const { Webhook, WebhookDelivery } = require("../../models");
 const { logger } = require("../../middlewares/activityLog.middleware");

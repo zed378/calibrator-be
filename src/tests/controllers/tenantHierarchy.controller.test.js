@@ -3,16 +3,14 @@
  */
 
 jest.mock("../../services/tenantHierarchy.service", () => ({
-  tenantHierarchyService: {
-    createSubOrganization: jest.fn(),
-    getTenantTree: jest.fn(),
-    getDescendantTenants: jest.fn(),
-    getAncestorTenants: jest.fn(),
-    getDataVisibilityScope: jest.fn(),
-    assignRoleToUserAcrossHierarchy: jest.fn(),
-    getUserRolesAcrossTenants: jest.fn(),
-    getStatus: jest.fn(() => ({ enabled: true, maxDepth: 5, cascadeRoles: false })),
-  },
+  createSubOrganization: jest.fn(),
+  getTenantTree: jest.fn(),
+  getDescendantTenants: jest.fn(),
+  getAncestorTenants: jest.fn(),
+  getDataVisibilityScope: jest.fn(),
+  assignRoleToUserAcrossHierarchy: jest.fn(),
+  getUserRolesAcrossTenants: jest.fn(),
+  getStatus: jest.fn(() => ({ enabled: true, maxDepth: 5, cascadeRoles: false })),
 }));
 
 jest.mock("../../models", () => ({
@@ -36,7 +34,7 @@ jest.mock("../../middlewares/activityLog.middleware", () => ({
 }));
 
 const tenantHierarchyController = require("../../controllers/tenantHierarchy.controller");
-const tenantHierarchyService = require("../../services/tenantHierarchy.service").tenantHierarchyService;
+const tenantHierarchyService = require("../../services/tenantHierarchy.service");
 const { success, error } = require("../../utils/response.util");
 
 const TENANT_ID = "550e8400-e29b-41d4-a716-446655440000";

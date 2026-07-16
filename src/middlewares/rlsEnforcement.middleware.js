@@ -4,23 +4,20 @@ const { logger } = require("./activityLog.middleware");
 const { models } = require("../models");
 
 /**
- * Enforce Postgres Row-Level Security (RLS) for every request.
+ * @deprecated DO NOT WIRE THIS INTO THE REQUEST PIPELINE.
  *
- * This middleware complements the app-level tenant hooks in models/index.js
- * by enabling native Postgres RLS policies for the current session/transaction.
+ * This middleware sets `app.current_tenant` with a SESSION-level `SET` (not
+ * `SET LOCAL`). Under a transaction-mode connection pooler (PgBouncer / RDS
+ * Proxy) the value persists on the recycled backend and the NEXT request on that
+ * connection inherits the previous tenant's context — a cross-tenant data leak.
  *
- * CRITICAL FIX: Uses session-level SET instead of SET LOCAL to avoid
- * transaction nesting issues. SET LOCAL only persists within a transaction
- * block, but the transaction may commit before the response finishes,
- * causing RLS settings to be lost on subsequent queries.
- *
- * Behavior:
- * - Postgres: sets the local app.current_tenant session variable
- *   (handled by tenantContext.js) and enables FORCE ROW LEVEL SECURITY
- *   on the current session to prevent superuser bypass.
- * - Other dialects: no-op.
+ * The correct, transaction-scoped implementation lives in
+ * `tenantContext.middleware.js` (`setupPostgresRLS`), which uses parameterized
+ * `set_config('app.current_tenant', $1, true)` bound to the request transaction.
+ * That is the middleware wired via `auth`. Only `initializePostgresRLS` (below)
+ * is imported in production; this function is retained solely for its unit tests
+ * and must not be added to the app middleware chain.
  */
-
 const rlsEnforcementMiddleware = async (req, res, next) => {
   if (db.getDialect() !== "postgres") {
     return next();

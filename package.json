@@ -39,7 +39,7 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "build": "bun build index.js --compile --loader:.html=text --target bun-linux-x64 --outfile dist/boilerplate",
-    "swagger:generate": "node src/utils/generateSwagger.js",
+    "swagger:generate": "node src/utils/generateSwagger.util.js",
     "migrate": "node src/scripts/migrate.js up",
     "migrate:undo": "node src/scripts/migrate.js down",
     "migrate:status": "node src/scripts/migrate.js pending",

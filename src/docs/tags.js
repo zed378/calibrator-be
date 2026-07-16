@@ -102,5 +102,80 @@ module.exports = {
       description:
         "Digital signature workflow management endpoints for 21 CFR Part 11 compliance including key pair generation, workflow management, and signature verification",
     },
+    {
+      name: "QMS",
+      description:
+        "Quality Management System endpoints for non-conformances (NC) and corrective/preventive actions (CAPA)",
+    },
+    {
+      name: "SOP",
+      description:
+        "Standard Operating Procedure endpoints for controlled documents and tenant-wide training acknowledgment",
+    },
+    {
+      name: "Risk",
+      description:
+        "Risk register endpoints (ISO 14971): risk assessment with severity × likelihood scoring and mitigation tracking",
+    },
+    {
+      name: "SupplierScorecard",
+      description:
+        "Supplier performance scorecard endpoints for periodic quality/delivery/service evaluation of vendors",
+    },
+    {
+      name: "Maintenance",
+      description:
+        "Maintenance work-order endpoints (preventive, breakdown, repair) for calibration devices",
+    },
+    {
+      name: "PredictiveMaintenance",
+      description:
+        "Predictive maintenance endpoints: IoT anomaly analysis and calibration-interval recommendations",
+    },
+    {
+      name: "IoT",
+      description:
+        "IoT telemetry ingestion endpoints (device-token authenticated) with anomaly detection against reading tolerances",
+    },
+    {
+      name: "AI",
+      description:
+        "AI assistant endpoints: certificate OCR extraction and retrieval-augmented (RAG) document Q&A",
+    },
+    {
+      name: "FeatureFlags",
+      description:
+        "Per-tenant feature flag endpoints for evaluating, overriding, and initializing capability toggles",
+    },
+    {
+      name: "TenantLifecycle",
+      description:
+        "Tenant lifecycle endpoints: suspension, resumption, grace period, offboarding, and data export",
+    },
+    {
+      name: "DataRetention",
+      description:
+        "Data retention & privacy governance endpoints: retention policies, legal hold, purge, PII masking, and anonymization",
+    },
+    {
+      name: "OIDC",
+      description:
+        "OpenID Connect provider endpoints: discovery, JWKS, and dynamic client registration/rotation",
+    },
+    {
+      name: "WebAuthn",
+      description:
+        "WebAuthn / FIDO passwordless endpoints for security-key registration and assertion verification",
+    },
+    {
+      name: "NetworkSecurity",
+      description:
+        "Network security endpoints: per-tenant IP allowlist (CIDR), geofencing, and login evaluation",
+    },
+    {
+      name: "SCIM",
+      description:
+        "SCIM 2.0 provisioning endpoints for automated Users and Groups lifecycle from an external IdP",
+    },
   ],
 };

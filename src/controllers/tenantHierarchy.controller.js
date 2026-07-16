@@ -4,9 +4,10 @@
  * Handles parent-tenant to child business unit relationships.
  */
 
-const {
-  tenantHierarchyService,
-} = require("../services/tenantHierarchy.service");
+// The service exports its functions at the top level (exports.fn), so it must be
+// imported as the module object — NOT destructured as `{ tenantHierarchyService }`
+// (which was undefined and made every endpoint throw at runtime).
+const tenantHierarchyService = require("../services/tenantHierarchy.service");
 const { success, error } = require("../utils/response.util");
 const { asyncHandler } = require("../utils/controllerWrapper.util");
 const { logger } = require("../middlewares/activityLog.middleware");

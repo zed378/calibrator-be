@@ -1,7 +1,7 @@
 /**
  * @swagger
  * tags:
- *   name: Tenant Backups
+ *   name: TenantBackup
  *   description: Endpoints for managing tenant backups and restores
  * components:
  *   securitySchemes:
@@ -39,7 +39,7 @@ const tenantBackupValidator = require("../../validators/tenantBackup.validator")
  *     summary: Create a backup for a tenant
  *     description: Requires SUPER_ADMIN or TENANT_ADMIN role with tenant:update permission. Creates a ZIP file containing tenant data (settings, roles, features, users, permissions).
  *     tags:
- *       - Tenant Backups
+ *       - TenantBackup
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -159,7 +159,7 @@ router.post(
  *     summary: Get all backups for a tenant
  *     description: Requires SUPER_ADMIN or TENANT_ADMIN role with tenant:read permission. Returns paginated list of backups with status, size, and metadata.
  *     tags:
- *       - Tenant Backups
+ *       - TenantBackup
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -273,7 +273,7 @@ router.get(
  *     summary: Get backup statistics for a tenant
  *     description: Requires SUPER_ADMIN or TENANT_ADMIN role with tenant:read permission. Returns totals, completed/failed counts, total size, and the latest backup.
  *     tags:
- *       - Tenant Backups
+ *       - TenantBackup
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -311,7 +311,7 @@ router.get(
  *     summary: Get details of a specific backup
  *     description: Requires SUPER_ADMIN or TENANT_ADMIN role with tenant:read permission. Returns detailed information about a specific backup including creator, size, and metadata.
  *     tags:
- *       - Tenant Backups
+ *       - TenantBackup
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -410,7 +410,7 @@ router.get(
  *     summary: Download a backup file
  *     description: Requires SUPER_ADMIN or TENANT_ADMIN role with tenant:read permission. Downloads the ZIP file containing the backup data.
  *     tags:
- *       - Tenant Backups
+ *       - TenantBackup
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -503,7 +503,7 @@ router.get(
  *     summary: Restore a backup for a tenant
  *     description: Requires SUPER_ADMIN or TENANT_ADMIN role with tenant:update permission. Restores tenant data from a backup. Can optionally merge with existing data.
  *     tags:
- *       - Tenant Backups
+ *       - TenantBackup
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -623,7 +623,7 @@ router.post(
  *     summary: Delete a backup
  *     description: Requires SUPER_ADMIN or TENANT_ADMIN role with tenant:delete permission. Deletes the backup file and record.
  *     tags:
- *       - Tenant Backups
+ *       - TenantBackup
  *     security:
  *       - bearerAuth: []
  *     parameters:

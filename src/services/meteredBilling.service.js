@@ -456,6 +456,196 @@ exports.getPlatformAnalytics = async (options = {}) => {
 };
 
 // ==========================================
+// TENANT-FACING BILLING API (consumed by meteredBilling.controller)
+// ==========================================
+
+// Overage / estimate rate card (USD per unit).
+const RATE_CARD = {
+  api_calls: 0.0001,
+  storage_bytes: 0.00000001,
+  calibrations: 0.5,
+  documents: 0.01,
+  users: 2.0,
+  notifications: 0.001,
+};
+
+// Included limits per plan (null = unlimited).
+const PLAN_LIMITS = {
+  free: { api_calls: 10000, storage_bytes: 1073741824, calibrations: 50, users: 5 },
+  professional: {
+    api_calls: 100000,
+    storage_bytes: 10737418240,
+    calibrations: 500,
+    users: 25,
+  },
+  business: {
+    api_calls: 1000000,
+    storage_bytes: 107374182400,
+    calibrations: 5000,
+    users: 100,
+  },
+  enterprise: {
+    api_calls: null,
+    storage_bytes: null,
+    calibrations: null,
+    users: null,
+  },
+};
+
+const PERIOD_DAYS = { "7d": 7, "30d": 30, "90d": 90, "1y": 365 };
+
+/** Current usage snapshot for a tenant (all metrics). */
+exports.getTenantUsage = async (tenantId) => {
+  return {
+    tenantId,
+    metrics: await exports.getAllUsage(tenantId),
+    generatedAt: new Date().toISOString(),
+  };
+};
+
+/** Paginated billing history for a tenant (backed by invoices). */
+exports.getBillingHistory = async (
+  tenantId,
+  page = 1,
+  limit = 20,
+  startDate,
+  endDate,
+) => {
+  const { Invoice } = require("../models");
+  const where = { tenantId };
+  if (startDate || endDate) {
+    where.createdAt = {};
+    if (startDate) {
+      where.createdAt[db.Sequelize.Op.gte] = new Date(startDate);
+    }
+    if (endDate) {
+      where.createdAt[db.Sequelize.Op.lte] = new Date(endDate);
+    }
+  }
+  const safeLimit = Math.min(Number(limit) || 20, 100);
+  const safePage = Math.max(Number(page) || 1, 1);
+  const { count, rows } = await Invoice.findAndCountAll({
+    where,
+    limit: safeLimit,
+    offset: (safePage - 1) * safeLimit,
+    order: [["createdAt", "DESC"]],
+  });
+  return {
+    rows,
+    meta: {
+      total: count,
+      page: safePage,
+      limit: safeLimit,
+      totalPages: Math.ceil(count / safeLimit),
+    },
+  };
+};
+
+/**
+ * Estimate cost for planned usage. `metrics` maps metricName -> units; the cost
+ * of each is rate * units * quantity.
+ */
+exports.estimateCost = async (tenantId, metrics, quantity) => {
+  if (!metrics || typeof metrics !== "object") {
+    throw new AppError(400, "metrics object is required");
+  }
+  const multiplier = Number(quantity) || 1;
+  const lineItems = [];
+  let total = 0;
+  for (const [metric, units] of Object.entries(metrics)) {
+    const rate = RATE_CARD[metric] || 0;
+    const qty = (Number(units) || 0) * multiplier;
+    const cost = rate * qty;
+    lineItems.push({ metric, rate, quantity: qty, cost: Number(cost.toFixed(4)) });
+    total += cost;
+  }
+  return {
+    currency: "USD",
+    quantity: multiplier,
+    lineItems,
+    total: Number(total.toFixed(2)),
+  };
+};
+
+/** Plan details, included limits, and overage pricing for a tenant. */
+exports.getPlanDetails = async (tenantId) => {
+  const { Tenant } = require("../models");
+  const tenant = await Tenant.findByPk(tenantId);
+  if (!tenant) {
+    throw new AppError(404, "Tenant not found");
+  }
+  const plan = tenant.plan || "free";
+  const limits = PLAN_LIMITS[plan] || PLAN_LIMITS.free;
+  return {
+    plan,
+    billingCycle: tenant.billingCycle,
+    limits: {
+      ...limits,
+      seats: tenant.limitSeats,
+      storageMb: tenant.limitStorageMb,
+    },
+    overagePricing: RATE_CARD,
+  };
+};
+
+/** List a tenant's usage alerts. */
+exports.getUsageAlerts = async (tenantId) => {
+  const { UsageAlert } = require("../models");
+  return await UsageAlert.findAll({
+    where: { tenantId },
+    order: [["createdAt", "DESC"]],
+  });
+};
+
+/** Create a usage alert. */
+exports.createUsageAlert = async (tenantId, alertData = {}) => {
+  const { UsageAlert } = require("../models");
+  if (
+    !alertData.metricName ||
+    alertData.threshold === undefined ||
+    alertData.threshold === null
+  ) {
+    throw new AppError(400, "metricName and threshold are required");
+  }
+  return await UsageAlert.create({
+    tenantId,
+    metricName: alertData.metricName,
+    threshold: alertData.threshold,
+    comparison: alertData.comparison || "gte",
+    notificationChannels: alertData.notificationChannels || ["email"],
+    isEnabled: alertData.isEnabled !== false,
+    description: alertData.description || "",
+  });
+};
+
+/** Delete a tenant-owned usage alert. */
+exports.deleteUsageAlert = async (tenantId, alertId) => {
+  const { UsageAlert } = require("../models");
+  const alert = await UsageAlert.findOne({ where: { id: alertId, tenantId } });
+  if (!alert) {
+    throw new AppError(404, "Usage alert not found");
+  }
+  await alert.destroy();
+  return { success: true, id: alertId };
+};
+
+/** Per-tenant usage analytics for a dashboard period (7d/30d/90d/1y). */
+exports.getAnalytics = async (tenantId, period = "30d") => {
+  const days = PERIOD_DAYS[period] || 30;
+  // Note: destructure explicitly — generateUsageReport also returns a `period`
+  // (an object) which would otherwise clobber the period label via a spread.
+  const report = await exports.generateUsageReport(tenantId, days);
+  return {
+    tenantId,
+    period,
+    days,
+    generatedAt: report.generatedAt,
+    metrics: report.metrics,
+    summary: report.summary,
+  };
+};
+
+// ==========================================
 // UTILITY FUNCTIONS
 // ==========================================
 

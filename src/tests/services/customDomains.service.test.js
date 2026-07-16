@@ -1,25 +1,12 @@
 /**
- * Tests for Custom Domains Service
+ * Tests for Custom Domains Service (model-based, id-keyed).
  */
-
 jest.mock("../../middlewares/activityLog.middleware", () => ({
-  logger: {
-    debug: jest.fn(),
-    info: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
-  },
+  logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() },
 }));
 
-const mockDb = {
-  getDialect: jest.fn().mockReturnValue("sqlite"),
-  QueryTypes: { SELECT: "SELECT" },
-  Sequelize: { Op: { ne: "ne_symbol" } },
-  query: jest.fn(),
-};
-
 jest.mock("../../config", () => ({
-  db: mockDb,
+  db: { Sequelize: { Op: { ne: "ne_symbol" } } },
 }));
 
 jest.mock("../../utils/appError.util", () => ({
@@ -38,280 +25,230 @@ jest.mock("../../models", () => ({
     findOne: jest.fn(),
     findAll: jest.fn(),
   },
-  User: {
-    findOne: jest.fn(),
-  },
+  User: { findOne: jest.fn() },
 }));
 
 jest.mock("../../services/emailQueue.service", () => ({
-  emailQueueService: {
-    queueEmail: jest.fn().mockResolvedValue(undefined),
-  },
+  emailQueueService: { queueEmail: jest.fn().mockResolvedValue(undefined) },
 }));
 
-const customDomainsService = require("../../services/customDomains.service");
+const svc = require("../../services/customDomains.service");
 const { CustomDomain, User } = require("../../models");
 const { emailQueueService } = require("../../services/emailQueue.service");
+
+const makeRecord = (over = {}) => {
+  const rec = {
+    id: "d-1",
+    tenantId: "tenant-1",
+    domain: "app.example.com",
+    domainType: "subdomain",
+    status: "pending_verification",
+    sslEnabled: true,
+    isDefault: false,
+    verificationToken: "callibrator-verify=abc123",
+    verifiedAt: null,
+    lastCheckedAt: null,
+    ...over,
+  };
+  rec.update = jest.fn(async (vals) => {
+    Object.assign(rec, vals);
+    return rec;
+  });
+  return rec;
+};
 
 describe("customDomainsService", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.CUSTOM_DOMAINS_ENABLED = "true";
     process.env.DEFAULT_SUBDOMAIN = "app";
-    process.env.DNS_CHECK_INTERVAL = "300";
     process.env.TLS_AUTO_PROVISION = "false";
-    mockDb.getDialect.mockReturnValue("sqlite");
-
-    CustomDomain.create.mockResolvedValue({
-      domain: "app.example.com",
-      status: "pending_verification",
-    });
-    CustomDomain.update.mockResolvedValue([1]);
     CustomDomain.findOne.mockResolvedValue(null);
     CustomDomain.findAll.mockResolvedValue([]);
-    User.findOne.mockResolvedValue({ email: "admin@example.com" });
-    mockDb.query.mockResolvedValue([]);
-  });
-
-  afterEach(() => {
-    process.env.CUSTOM_DOMAINS_ENABLED = "true";
-    process.env.TLS_AUTO_PROVISION = "false";
-  });
-
-  describe("verifyDomain", () => {
-    it("should return verified with DNS record", async () => {
-      const result = await customDomainsService.verifyDomain("example.com");
-
-      expect(result).toHaveProperty("verified");
-      expect(result).toHaveProperty("record");
-      expect(result).toHaveProperty("dnsRecord");
-      expect(result.dnsRecord.type).toBe("CNAME");
+    CustomDomain.update.mockResolvedValue([1]);
+    CustomDomain.create.mockResolvedValue({
+      id: "d-1",
+      domain: "app.example.com",
+      status: "pending_verification",
+      sslEnabled: true,
     });
+    User.findOne.mockResolvedValue({ email: "admin@example.com" });
+  });
 
-    it("should return not verified when custom domains disabled", async () => {
-      process.env.CUSTOM_DOMAINS_ENABLED = "false";
-      const result = await customDomainsService.verifyDomain("example.com");
-
-      expect(result.verified).toBe(false);
-      expect(result.reason).toBe("Custom domains disabled");
+  describe("getTenantDomains", () => {
+    it("returns the tenant's domains", async () => {
+      CustomDomain.findAll.mockResolvedValueOnce([{ domain: "a.com" }]);
+      const res = await svc.getTenantDomains("t-1");
+      expect(res).toEqual([{ domain: "a.com" }]);
+    });
+    it("returns [] on failure", async () => {
+      CustomDomain.findAll.mockRejectedValueOnce(new Error("db"));
+      expect(await svc.getTenantDomains("t-1")).toEqual([]);
     });
   });
 
   describe("addDomain", () => {
-    it("should add domain using Postgres raw SQL", async () => {
-      mockDb.getDialect.mockReturnValue("postgres");
-      mockDb.query
-        .mockResolvedValueOnce([]) // for check existing domain
-        .mockResolvedValueOnce([{ domain: "pg.com", status: "pending_verification" }]); // for insertion
-
-      const result = await customDomainsService.addDomain("tenant-1", "pg.com");
-      expect(result.domain).toBe("pg.com");
-      expect(mockDb.query).toHaveBeenCalledTimes(2);
-    });
-
-    it("should add domain using SQLite model", async () => {
-      const result = await customDomainsService.addDomain("tenant-1", "app.example.com");
-      expect(result.domain).toBe("app.example.com");
-      expect(CustomDomain.create).toHaveBeenCalled();
-    });
-
-    it("should send verification email to admin", async () => {
-      await customDomainsService.addDomain("tenant-1", "app.example.com");
-      expect(emailQueueService.queueEmail).toHaveBeenCalledWith(
+    it("adds a domain from the object form and returns DNS instructions", async () => {
+      const res = await svc.addDomain("tenant-1", {
+        domain: "app.example.com",
+        type: "subdomain",
+        sslEnabled: true,
+      });
+      expect(CustomDomain.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          to: "admin@example.com",
-          subject: "Verify domain: app.example.com",
-        })
+          tenantId: "tenant-1",
+          domain: "app.example.com",
+          domainType: "subdomain",
+          sslEnabled: true,
+          status: "pending_verification",
+        }),
+      );
+      expect(res.verification.cname.value).toBe("cname.callibrator.io.");
+      expect(emailQueueService.queueEmail).toHaveBeenCalledWith(
+        expect.objectContaining({ subject: "Verify domain: app.example.com" }),
       );
     });
 
-    it("should handle error when admin email is missing or throws", async () => {
-      User.findOne.mockRejectedValueOnce(new Error("User find failed"));
-      await customDomainsService.addDomain("tenant-1", "app.example.com");
-      // Should not throw, handles warning log
+    it("adds a domain from the string form", async () => {
+      const res = await svc.addDomain("tenant-1", "app.example.com", "custom");
+      expect(res.domain).toBe("app.example.com");
     });
 
-    it("should throw conflict error if domain already exists", async () => {
+    it("409s when the domain already exists", async () => {
       CustomDomain.findOne.mockResolvedValueOnce({ domain: "app.example.com", status: "active" });
-      await expect(customDomainsService.addDomain("tenant-1", "app.example.com")).rejects.toThrow(
-        "Domain already assigned to another tenant"
-      );
+      await expect(svc.addDomain("tenant-1", "app.example.com")).rejects.toMatchObject({ status: 409 });
     });
 
-    it("should throw error for invalid domain format", async () => {
-      await expect(customDomainsService.addDomain("tenant-1", "not a domain")).rejects.toThrow(
-        "Invalid domain format"
-      );
+    it("400s on invalid domain format", async () => {
+      await expect(svc.addDomain("tenant-1", "not a domain")).rejects.toMatchObject({ status: 400 });
     });
 
-    it("should handle database errors gracefully", async () => {
-      CustomDomain.create.mockRejectedValueOnce(new Error("DB Error"));
-      await expect(customDomainsService.addDomain("tenant-1", "app.example.com")).rejects.toThrow(
-        "Failed to add domain"
-      );
-    });
-
-    it("should throw error when custom domains disabled", async () => {
+    it("400s when disabled", async () => {
       process.env.CUSTOM_DOMAINS_ENABLED = "false";
-      await expect(customDomainsService.addDomain("tenant-1", "app.example.com")).rejects.toThrow(
-        "Custom domains are disabled"
+      await expect(svc.addDomain("tenant-1", "app.example.com")).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("400s when tenantId or domain missing", async () => {
+      await expect(svc.addDomain(null, "app.example.com")).rejects.toMatchObject({ status: 400 });
+      await expect(svc.addDomain("tenant-1", null)).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("500s and wraps a DB failure", async () => {
+      CustomDomain.create.mockRejectedValueOnce(new Error("DB"));
+      await expect(svc.addDomain("tenant-1", "app.example.com")).rejects.toMatchObject({ status: 500 });
+    });
+  });
+
+  describe("verifyDomain", () => {
+    it("activates the domain on successful DNS check", async () => {
+      const rec = makeRecord();
+      CustomDomain.findOne.mockResolvedValueOnce(rec);
+      const res = await svc.verifyDomain("tenant-1", "d-1");
+      expect(res.verified).toBe(true);
+      expect(res.status).toBe("active");
+      expect(rec.update).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "active" }),
       );
     });
 
-    it("should throw error when tenantId is missing", async () => {
-      await expect(customDomainsService.addDomain(null, "app.example.com")).rejects.toThrow(
-        "tenantId and domain are required"
-      );
+    it("returns disabled result when the feature is off", async () => {
+      process.env.CUSTOM_DOMAINS_ENABLED = "false";
+      const res = await svc.verifyDomain("tenant-1", "d-1");
+      expect(res.verified).toBe(false);
     });
 
-    it("should throw error when domain is missing", async () => {
-      await expect(customDomainsService.addDomain("tenant-1", null)).rejects.toThrow(
-        "tenantId and domain are required"
-      );
+    it("404s when the domain is not owned", async () => {
+      CustomDomain.findOne.mockResolvedValueOnce(null);
+      await expect(svc.verifyDomain("tenant-1", "missing")).rejects.toMatchObject({ status: 404 });
     });
   });
 
   describe("removeDomain", () => {
-    it("should remove domain using Postgres raw SQL", async () => {
-      mockDb.getDialect.mockReturnValue("postgres");
-      const result = await customDomainsService.removeDomain("tenant-1", "pg.com");
-      expect(result.success).toBe(true);
-      expect(mockDb.query).toHaveBeenCalled();
+    it("soft-deletes the domain", async () => {
+      const rec = makeRecord();
+      CustomDomain.findOne.mockResolvedValueOnce(rec);
+      const res = await svc.removeDomain("tenant-1", "d-1");
+      expect(res).toEqual({ success: true, id: "d-1" });
+      expect(rec.status).toBe("deleted");
     });
-
-    it("should remove domain using SQLite model", async () => {
-      const result = await customDomainsService.removeDomain("tenant-1", "app.example.com");
-      expect(result.success).toBe(true);
-      expect(CustomDomain.update).toHaveBeenCalled();
+    it("404s when not found", async () => {
+      await expect(svc.removeDomain("tenant-1", "missing")).rejects.toMatchObject({ status: 404 });
     });
-
-    it("should throw error when removal db transaction throws error", async () => {
-      CustomDomain.update.mockRejectedValueOnce(new Error("DB Error"));
-      await expect(customDomainsService.removeDomain("tenant-1", "app.example.com")).rejects.toThrow(
-        "Failed to remove domain"
-      );
-    });
-
-    it("should throw error when tenantId is missing", async () => {
-      await expect(customDomainsService.removeDomain(null, "app.example.com")).rejects.toThrow(
-        "tenantId and domain are required"
-      );
-    });
-
-    it("should throw error when domain is missing", async () => {
-      await expect(customDomainsService.removeDomain("tenant-1", null)).rejects.toThrow(
-        "tenantId and domain are required"
-      );
+    it("400s when args are missing", async () => {
+      await expect(svc.removeDomain(null, "d-1")).rejects.toMatchObject({ status: 400 });
     });
   });
 
-  describe("getDomainByDomain", () => {
-    it("should retrieve domain using Postgres", async () => {
-      mockDb.getDialect.mockReturnValue("postgres");
-      mockDb.query.mockResolvedValueOnce([{ domain: "pg.com", status: "active" }]);
-      const result = await customDomainsService.getDomainByDomain("pg.com");
-      expect(result.domain).toBe("pg.com");
+  describe("getDomainStatus", () => {
+    it("returns the domain status", async () => {
+      CustomDomain.findOne.mockResolvedValueOnce(makeRecord({ status: "active" }));
+      const res = await svc.getDomainStatus("tenant-1", "d-1");
+      expect(res).toMatchObject({ id: "d-1", status: "active", isDefault: false });
     });
-
-    it("should retrieve domain using SQLite", async () => {
-      CustomDomain.findOne.mockResolvedValueOnce({ domain: "sq.com", status: "active" });
-      const result = await customDomainsService.getDomainByDomain("sq.com");
-      expect(result.domain).toBe("sq.com");
+    it("404s when not found", async () => {
+      await expect(svc.getDomainStatus("tenant-1", "missing")).rejects.toMatchObject({ status: 404 });
     });
+  });
 
-    it("should return null on DB error", async () => {
-      CustomDomain.findOne.mockRejectedValueOnce(new Error("DB Error"));
-      const result = await customDomainsService.getDomainByDomain("sq.com");
-      expect(result).toBeNull();
+  describe("setDefaultDomain", () => {
+    it("clears other defaults and sets this one", async () => {
+      const rec = makeRecord({ status: "active" });
+      CustomDomain.findOne.mockResolvedValueOnce(rec);
+      const res = await svc.setDefaultDomain("tenant-1", "d-1");
+      expect(CustomDomain.update).toHaveBeenCalledWith(
+        { isDefault: false },
+        { where: { tenantId: "tenant-1" } },
+      );
+      expect(rec.update).toHaveBeenCalledWith({ isDefault: true });
+      expect(res.isDefault).toBe(true);
+    });
+    it("400s for a deleted domain", async () => {
+      CustomDomain.findOne.mockResolvedValueOnce(makeRecord({ status: "deleted" }));
+      await expect(svc.setDefaultDomain("tenant-1", "d-1")).rejects.toMatchObject({ status: 400 });
+    });
+  });
+
+  describe("getDnsRecords", () => {
+    it("returns TXT + CNAME instructions", async () => {
+      CustomDomain.findOne.mockResolvedValueOnce(makeRecord());
+      const res = await svc.getDnsRecords("tenant-1", "d-1");
+      expect(res.verification.type).toBe("TXT");
+      expect(res.cname.type).toBe("CNAME");
     });
   });
 
   describe("resolveTenantByDomain", () => {
-    it("should resolve tenant using Postgres", async () => {
-      mockDb.getDialect.mockReturnValue("postgres");
-      mockDb.query.mockResolvedValueOnce([{ tenantId: "tenant-pg", domain: "pg.com" }]);
-      const result = await customDomainsService.resolveTenantByDomain("pg.com");
-      expect(result.tenantId).toBe("tenant-pg");
+    it("resolves a tenant from an active domain", async () => {
+      CustomDomain.findOne.mockResolvedValueOnce({ tenantId: "tenant-9", domain: "x.com" });
+      expect(await svc.resolveTenantByDomain("x.com")).toEqual({
+        tenantId: "tenant-9",
+        domain: "x.com",
+      });
     });
-
-    it("should resolve tenant using SQLite", async () => {
-      CustomDomain.findOne.mockResolvedValueOnce({ tenantId: "tenant-sq", domain: "sq.com" });
-      const result = await customDomainsService.resolveTenantByDomain("sq.com");
-      expect(result.tenantId).toBe("tenant-sq");
+    it("returns null when disabled", async () => {
+      process.env.CUSTOM_DOMAINS_ENABLED = "false";
+      expect(await svc.resolveTenantByDomain("x.com")).toBeNull();
     });
-
-    it("should return null when resolution db query fails", async () => {
-      CustomDomain.findOne.mockRejectedValueOnce(new Error("DB Error"));
-      const result = await customDomainsService.resolveTenantByDomain("sq.com");
-      expect(result).toBeNull();
-    });
-
-    it("should return null for default subdomain", async () => {
-      process.env.DEFAULT_SUBDOMAIN = "app";
-      const result = await customDomainsService.resolveTenantByDomain("app.callibrator.io");
-      expect(result).toBeNull();
+    it("returns null on miss", async () => {
+      expect(await svc.resolveTenantByDomain("nope.com")).toBeNull();
     });
   });
 
-  describe("getTenantDomains", () => {
-    it("should list domains using Postgres", async () => {
-      mockDb.getDialect.mockReturnValue("postgres");
-      mockDb.query.mockResolvedValueOnce([{ domain: "pg.com" }]);
-      const result = await customDomainsService.getTenantDomains("t-1");
-      expect(result[0].domain).toBe("pg.com");
-    });
-
-    it("should list domains using SQLite", async () => {
-      CustomDomain.findAll.mockResolvedValueOnce([{ domain: "sq.com" }]);
-      const result = await customDomainsService.getTenantDomains("t-1");
-      expect(result[0].domain).toBe("sq.com");
-    });
-
-    it("should return empty array on failure", async () => {
-      CustomDomain.findAll.mockRejectedValueOnce(new Error("DB error"));
-      const result = await customDomainsService.getTenantDomains("t-1");
-      expect(result).toEqual([]);
-    });
-  });
-
-  describe("provisionTLSCertificate", () => {
-    it("should return success when TLS auto-provisioning enabled", async () => {
+  describe("provisionTLSCertificate + status + constants", () => {
+    it("provisions when enabled", async () => {
       process.env.TLS_AUTO_PROVISION = "true";
-      const result = await customDomainsService.provisionTLSCertificate("example.com");
-
-      expect(result).toHaveProperty("success", true);
-      expect(result).toHaveProperty("certificate");
+      const res = await svc.provisionTLSCertificate("x.com");
+      expect(res.success).toBe(true);
     });
-
-    it("should return failure when TLS auto-provisioning disabled", async () => {
+    it("declines when disabled", async () => {
       process.env.TLS_AUTO_PROVISION = "false";
-      const result = await customDomainsService.provisionTLSCertificate("example.com");
-
-      expect(result.success).toBe(false);
-      expect(result.reason).toBe("TLS auto-provisioning disabled");
+      const res = await svc.provisionTLSCertificate("x.com");
+      expect(res.success).toBe(false);
     });
-  });
-
-  describe("getStatus", () => {
-    it("should return service status", () => {
-      const status = customDomainsService.getStatus();
-
-      expect(status).toHaveProperty("enabled", true);
-      expect(status).toHaveProperty("defaultSubdomain", "app");
-      expect(status).toHaveProperty("tlsAutoProvision", false);
-    });
-  });
-
-  describe("constants", () => {
-    it("should export DOMAIN_STATUS", () => {
-      expect(customDomainsService.DOMAIN_STATUS).toHaveProperty("PENDING_VERIFICATION");
-      expect(customDomainsService.DOMAIN_STATUS).toHaveProperty("ACTIVE");
-      expect(customDomainsService.DOMAIN_STATUS).toHaveProperty("DELETED");
-    });
-
-    it("should export DOMAIN_TYPE", () => {
-      expect(customDomainsService.DOMAIN_TYPE).toHaveProperty("CUSTOM");
-      expect(customDomainsService.DOMAIN_TYPE).toHaveProperty("SUBDOMAIN");
+    it("reports status and constants", () => {
+      expect(svc.getStatus()).toMatchObject({ enabled: true, defaultSubdomain: "app" });
+      expect(svc.DOMAIN_STATUS).toHaveProperty("ACTIVE", "active");
+      expect(svc.DOMAIN_TYPE).toHaveProperty("SUBDOMAIN", "subdomain");
     });
   });
 });

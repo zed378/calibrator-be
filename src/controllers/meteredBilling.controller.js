@@ -5,7 +5,10 @@
  */
 
 const { logger } = require("../middlewares/activityLog.middleware");
-const { meteredBillingService } = require("../services/meteredBilling.service");
+// The service exports its functions at the top level, so import the module
+// object — NOT `{ meteredBillingService }` (which was undefined and made every
+// endpoint throw at runtime).
+const meteredBillingService = require("../services/meteredBilling.service");
 const { success, error } = require("../utils/response.util");
 const { asyncHandler } = require("../utils/controllerWrapper.util");
 
@@ -88,7 +91,7 @@ exports.createUsageAlert = asyncHandler(async (req, res) => {
     alertData,
   );
 
-  return success(res, alert, 201, "Usage alert created");
+  return success(res, alert, null, "Usage alert created", 201);
 });
 
 /**

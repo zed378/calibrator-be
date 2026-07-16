@@ -11,7 +11,9 @@ let decryptCallCount = 0;
 jest.mock("crypto", () => ({
   createHash: jest.fn().mockImplementation(() => ({
     update: jest.fn().mockReturnThis(),
-    digest: jest.fn().mockReturnValue("mocked-hash-digest"),
+    // Valid 64-char hex (== 32 bytes) so the service's master-key length
+    // validation passes with the mocked crypto.
+    digest: jest.fn().mockReturnValue("a".repeat(64)),
   })),
   randomBytes: jest.fn().mockImplementation((size) => {
     // Return unique buffer each time by using call count

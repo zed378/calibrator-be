@@ -8,7 +8,7 @@
 const express = require("express");
 const router = express.Router();
 
-const { auth } = require("../../middlewares/auth.middleware");
+const { auth, denyApiKey } = require("../../middlewares/auth.middleware");
 const {
   getKeyPairs,
   createKeyPair,
@@ -116,7 +116,7 @@ router.get("/key-pairs", auth, getKeyPairs);
  *       401:
  *         description: Unauthorized
  */
-router.post("/key-pairs", auth, createKeyPairValidator.validate, createKeyPair);
+router.post("/key-pairs", auth, denyApiKey, createKeyPairValidator.validate, createKeyPair);
 
 /**
  * @swagger
@@ -429,7 +429,7 @@ router.delete(
  *       401:
  *         description: Unauthorized
  */
-router.post("/sign", auth, signDocumentValidator.validate, signDocument);
+router.post("/sign", auth, denyApiKey, signDocumentValidator.validate, signDocument);
 
 /**
  * @swagger

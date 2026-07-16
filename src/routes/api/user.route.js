@@ -21,6 +21,7 @@ const {
   enforceStorageQuota,
 } = require("../../middlewares/enforceQuota.middleware");
 const userController = require("../../controllers/user.controller");
+const { recordAudit } = require("../../middlewares/auditLog.middleware");
 
 /* ------------------------------------------------------------------ */
 /* GET ALL USERS (paginated, searchable, tenant‑scoped)               */
@@ -357,6 +358,9 @@ router.post(
   "/role-update",
   auth,
   dynamicAccess("users", "update", { checkTenant: true }),
+  recordAudit("UPDATE", "User", {
+    resolveResourceId: (req) => req.body?.userId,
+  }),
   userController.updateUserRole,
 );
 
@@ -463,6 +467,7 @@ router.post(
   auth,
   dynamicAccess("users", "create", { checkTenant: true }),
   enforceSeatQuota(),
+  recordAudit("CREATE", "User"),
   userController.createUser,
 );
 
@@ -599,6 +604,9 @@ router.delete(
   "/delete",
   auth,
   dynamicAccess("users", "delete", { checkTenant: true }),
+  recordAudit("DELETE", "User", {
+    resolveResourceId: (req) => req.query?.userId || req.body?.userId,
+  }),
   userController.deleteUser,
 );
 

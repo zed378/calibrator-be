@@ -88,7 +88,7 @@ async function fetchJwks(issuer) {
         "User-Agent": "Callibrator-OIDC/1.0",
       },
       // SECURITY: Validate TLS certificate
-      httpsAgent: require("https").Agent({
+      httpsAgent: new (require("https").Agent)({
         rejectUnauthorized: true,
       }),
     });

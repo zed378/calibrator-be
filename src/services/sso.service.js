@@ -285,52 +285,20 @@ exports.generateOidcAuthRequest = (tenantCode, ssoSettings) => {
 };
 
 /**
- * Verify OIDC callback (exchange code for tokens and parse id_token)
+ * Verify OIDC callback (exchange code for tokens and verify id_token).
+ *
+ * SECURITY: Delegates to services/oidcJwks.js, which fetches the IdP's JWKS and
+ * cryptographically verifies the id_token signature (algorithm allowlist +
+ * iss/aud/exp validation). This replaces the previous insecure path that trusted
+ * the token via jwt.decode() without any signature verification — which allowed a
+ * forged/unsigned id_token to authenticate an arbitrary user.
+ *
+ * NOTE: JWKS verification enforces the `iss` claim. For a multi-tenant Entra ID
+ * `common` authority the id_token `iss` is tenant-specific, so configure the
+ * per-tenant `oidc_authority` to the tenant-specific issuer if strict validation
+ * rejects tokens.
  */
 exports.verifyOidcCallback = async (code, ssoSettings, redirectUri) => {
-  const clientId = ssoSettings.oidc_client_id;
-  const clientSecret = ssoSettings.oidc_client_secret;
-  const authority =
-    ssoSettings.oidc_authority ||
-    "https://login.microsoftonline.com/common/oauth2/v2.0";
-
-  try {
-    const tokenResponse = await axios.post(
-      `${authority}/token`,
-      new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        grant_type: "authorization_code",
-        code: code,
-        redirect_uri: redirectUri,
-      }).toString(),
-      {
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-      },
-    );
-
-    const idToken = tokenResponse.data.id_token;
-    if (!idToken) throw new Error("No id_token returned");
-
-    // Decode id_token (In production, verify signature against IdP JWKS)
-    const decoded = jwt.decode(idToken);
-
-    return {
-      email: (
-        decoded.email ||
-        decoded.preferred_username ||
-        decoded.upn
-      ).toLowerCase(),
-      firstName: decoded.given_name || "SSO",
-      lastName: decoded.family_name || "User",
-    };
-  } catch (err) {
-    logger.error("OIDC verification failed", {
-      error: err.message,
-      response: err.response?.data,
-    });
-    throw new AppError(401, "OIDC authentication failed");
-  }
+  const oidcJwks = require("./oidcJwks");
+  return oidcJwks.verifyOidcCallback(code, ssoSettings, redirectUri);
 };

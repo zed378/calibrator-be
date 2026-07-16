@@ -1,5 +1,73 @@
 const { Tenants, Users, Roles, MenuGroups, RoleMenuPermissions } = require("../models");
 const { logger } = require("./activityLog.middleware");
+const auditService = require("../services/audit.service");
+
+// Valid AuditLog.action ENUM values — passing anything else would fail the insert.
+const AUDIT_ACTIONS = new Set([
+  "CREATE",
+  "UPDATE",
+  "DELETE",
+  "LOGIN",
+  "APPROVE",
+  "EXPORT",
+]);
+
+/**
+ * recordAudit(action, resourceType, opts?)
+ *
+ * Persists an immutable row to the `audit_logs` table (via auditService.logAction)
+ * for a mutating request, AFTER the response completes successfully (status < 400).
+ * This is the DB-backed compliance trail (FDA 21 CFR Part 11 §11.10(e)) — distinct
+ * from auditAction/withAudit above, which only write to the rotating file logs.
+ *
+ * It is best-effort and non-blocking: a logging failure never affects the response.
+ *
+ * @param {string} action        One of CREATE|UPDATE|DELETE|LOGIN|APPROVE|EXPORT.
+ * @param {string} resourceType  Logical entity name, e.g. "User", "Certificate".
+ * @param {object} [opts]
+ * @param {string}   [opts.idParam]          req.params key holding the resource id.
+ * @param {function} [opts.resolveResourceId] (req,res) => id, overrides idParam.
+ */
+const recordAudit = (action, resourceType, opts = {}) => {
+  if (!AUDIT_ACTIONS.has(action)) {
+    throw new Error(`recordAudit: invalid audit action "${action}"`);
+  }
+  return (req, res, next) => {
+    res.on("finish", () => {
+      // Only record successful mutations.
+      if (res.statusCode >= 400) {
+        return;
+      }
+      let resourceId = null;
+      try {
+        if (typeof opts.resolveResourceId === "function") {
+          resourceId = opts.resolveResourceId(req, res) || null;
+        } else if (opts.idParam) {
+          resourceId = req.params?.[opts.idParam] || null;
+        } else {
+          resourceId = req.params?.id || null;
+        }
+      } catch {
+        resourceId = null;
+      }
+      auditService
+        .logAction({
+          tenantId: req.tenantId || req.user?.tenantId || null,
+          userId: req.user?.id || null,
+          action,
+          resourceType,
+          resourceId,
+          ipAddress: req.ip || req.headers?.["x-forwarded-for"] || null,
+          userAgent:
+            (typeof req.get === "function" && req.get("User-Agent")) || null,
+        })
+        .catch(() => {
+          /* best-effort: logAction already logs its own failures */
+        });
+    });
+    next();
+  };
+};
 
 /**
  * Audit Logging Middleware
@@ -96,4 +164,4 @@ const withAudit = (action, resource) => (handler) => {
   };
 };
 
-module.exports = { auditAction, withAudit };
+module.exports = { auditAction, withAudit, recordAudit };

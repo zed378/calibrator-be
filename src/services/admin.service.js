@@ -1,5 +1,5 @@
 const { Tenants, Users, Role } = require("../models");
-const AppError = require("../utils/appError.util");
+const { AppError } = require("../utils/appError.util");
 
 // ==========================================
 // GET ALL TENANTS (SUPER ADMIN)
