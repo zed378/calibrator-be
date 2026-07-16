@@ -1,251 +1,134 @@
 /**
  * Tests for errorHandlers middleware
+ * Tests the global error handler with structured logging, sanitization,
+ * and standardized JSON responses in production and development modes.
  */
-
-jest.mock("../../middlewares/activityLog.middleware", () => ({
-  logger: {
-    error: jest.fn(),
-  },
+jest.mock("../../utils/fileValidation.util", () => ({
+  sanitizeError: jest.fn(),
 }));
 
-jest.mock("../../utils/fileValidation.util", () => ({
-  sanitizeError: jest.fn((err, isProduction) => ({
-    message: isProduction ? "Internal server error" : err.message,
-    code: err.code || "INTERNAL_ERROR",
-  })),
+jest.mock("../../middlewares/activityLog.middleware", () => ({
+  logger: { error: jest.fn() },
 }));
 
 const { logger } = require("../../middlewares/activityLog.middleware");
 const { sanitizeError } = require("../../utils/fileValidation.util");
 const { errorHandler } = require("../../middlewares/errorHandlers.middleware");
+const { createMockReq } = require("../utils/test.utils");
 
-describe("errorHandlers", () => {
-  let req;
-  let res;
-  let jsonCalls;
+describe("errorHandler middleware", () => {
+  let req, res, next;
+  const originalEnv = process.env.NODE_ENV;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    jsonCalls = [];
-
-    req = {
-      requestId: "req-123",
-      method: "GET",
-      originalUrl: "/api/test",
-      ip: "127.0.0.1",
-    };
-
+    req = createMockReq();
+    req.requestId = "req-123";
+    req.method = "POST";
+    req.originalUrl = "/api/users";
+    req.ip = "127.0.0.1";
     res = {
       status: jest.fn().mockReturnThis(),
-      json: jest.fn().mockImplementation((data) => {
-        jsonCalls.push(data);
-        return res;
-      }),
+      json: jest.fn().mockReturnThis(),
     };
+    next = jest.fn();
   });
 
-  describe("errorHandler", () => {
-    it("should return 500 for errors without status", () => {
-      const err = new Error("Unknown error");
+  afterEach(() => {
+    process.env.NODE_ENV = originalEnv;
+  });
 
-      errorHandler(err, req, res, jest.fn());
+  it("should log error with Winston and return sanitized response", () => {
+    process.env.NODE_ENV = "development";
+    const err = new Error("Something broke");
+    err.status = 500;
+    err.stack = "Error: Something broke\n    at handler";
 
-      expect(res.status).toHaveBeenCalledWith(500);
-      expect(logger.error).toHaveBeenCalled();
+    sanitizeError.mockReturnValue({ success: false, message: "Something broke" });
+
+    errorHandler(err, req, res, next);
+
+    expect(logger.error).toHaveBeenCalledWith("Something broke", expect.objectContaining({
+      requestId: "req-123",
+      statusCode: 500,
+      method: "POST",
+      url: "/api/users",
+      ip: "127.0.0.1",
+      stack: "Error: Something broke\n    at handler",
+    }));
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalled();
+    const calledWith = res.json.mock.calls[0][0];
+    expect(calledWith.message).toBe("Something broke");
+    expect(calledWith.requestId).toBe("req-123");
+  });
+
+  it("should sanitize error messages in production mode", () => {
+    process.env.NODE_ENV = "production";
+    const err = new Error("DB connection failed to host db.internal:5432");
+    err.status = 500;
+    err.stack = "Error: DB connection failed";
+
+    sanitizeError.mockReturnValue({
+      success: false,
+      message: "An unexpected error occurred. Please try again later.",
     });
 
-    it("should return the error status code", () => {
-      const err = new Error("Bad request");
-      err.status = 400;
+    errorHandler(err, req, res, next);
 
-      errorHandler(err, req, res, jest.fn());
+    expect(sanitizeError).toHaveBeenCalledWith(err, true);
+    const calledWith = res.json.mock.calls[0][0];
+    expect(calledWith.message).toBe("An unexpected error occurred. Please try again later.");
+    expect(calledWith.requestId).toBe("req-123");
+  });
 
-      expect(res.status).toHaveBeenCalledWith(400);
-    });
+  it("should use default status 500 when err.status is missing", () => {
+    process.env.NODE_ENV = "development";
+    const err = new Error("no status field");
+    delete err.status;
 
-    it("should include requestId in response", () => {
-      const err = new Error("Test error");
-      req.requestId = "custom-req-id";
+    sanitizeError.mockReturnValue({ success: false, message: "no status field" });
 
-      errorHandler(err, req, res, jest.fn());
+    errorHandler(err, req, res, next);
 
-      expect(jsonCalls[0]).toHaveProperty("requestId", "custom-req-id");
-    });
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
 
-    it("should use 'unknown' when no requestId", () => {
-      const err = new Error("Test error");
-      req.requestId = undefined;
+  it("should use the error's status code when provided", () => {
+    process.env.NODE_ENV = "development";
+    const err = new Error("bad request");
+    err.status = 400;
 
-      errorHandler(err, req, res, jest.fn());
+    sanitizeError.mockReturnValue({ success: false, message: "bad request" });
 
-      expect(jsonCalls[0].requestId).toBe("unknown");
-    });
+    errorHandler(err, req, res, next);
 
-    it("should sanitize error in production", () => {
-      process.env.NODE_ENV = "production";
-      const err = new Error("Database connection failed");
-      err.code = "DB_CONN_ERROR";
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
 
-      errorHandler(err, req, res, jest.fn());
+  it("should handle error with no message", () => {
+    process.env.NODE_ENV = "development";
+    const err = new Error();
+    err.status = 500;
 
-      expect(sanitizeError).toHaveBeenCalledWith(err, true);
-      expect(jsonCalls[0].message).toBe("Internal server error");
+    sanitizeError.mockReturnValue({ success: false, message: "Internal server error" });
 
-      process.env.NODE_ENV = "test";
-    });
+    errorHandler(err, req, res, next);
 
-    it("should not sanitize error in development", () => {
-      process.env.NODE_ENV = "development";
-      const err = new Error("Sensitive error");
+    expect(logger.error).toHaveBeenCalledWith("Internal server error", expect.any(Object));
+  });
 
-      errorHandler(err, req, res, jest.fn());
+  it("should include requestId 'unknown' when req.requestId is missing", () => {
+    process.env.NODE_ENV = "development";
+    delete req.requestId;
+    const err = new Error("test");
+    err.status = 500;
 
-      expect(sanitizeError).toHaveBeenCalledWith(err, false);
+    sanitizeError.mockReturnValue({ success: false, message: "test" });
 
-      process.env.NODE_ENV = "test";
-    });
+    errorHandler(err, req, res, next);
 
-    it("should log error details", () => {
-      const err = new Error("Test error");
-      err.stack = "Error: Test error\n    at line 1";
-
-      errorHandler(err, req, res, jest.fn());
-
-      expect(logger.error).toHaveBeenCalledWith("Test error", {
-        requestId: "req-123",
-        statusCode: 500,
-        method: "GET",
-        url: "/api/test",
-        ip: "127.0.0.1",
-        stack: err.stack,
-      });
-    });
-
-    it("should handle AppError with status", () => {
-      const err = new Error("Not found");
-      err.status = 404;
-      err.code = "NOT_FOUND";
-
-      errorHandler(err, req, res, jest.fn());
-
-      expect(res.status).toHaveBeenCalledWith(404);
-    });
-
-    it("should handle null error message", () => {
-      const err = { status: 500 };
-
-      errorHandler(err, req, res, jest.fn());
-
-      expect(logger.error).toHaveBeenCalled();
-    });
-
-    it("should handle error with empty message", () => {
-      const err = new Error("");
-      err.status = 500;
-
-      errorHandler(err, req, res, jest.fn());
-
-      expect(logger.error).toHaveBeenCalledWith(
-        "Internal server error",
-        expect.any(Object),
-      );
-    });
-
-    it("should handle error without stack property", () => {
-      const err = new Error("No stack error");
-      err.status = 500;
-      err.stack = undefined;
-
-      errorHandler(err, req, res, jest.fn());
-
-      expect(logger.error).toHaveBeenCalled();
-    });
-
-    it("should handle error with status 401", () => {
-      const err = new Error("Unauthorized");
-      err.status = 401;
-      err.code = "UNAUTHORIZED";
-
-      errorHandler(err, req, res, jest.fn());
-
-      expect(res.status).toHaveBeenCalledWith(401);
-    });
-
-    it("should handle error with status 403", () => {
-      const err = new Error("Forbidden");
-      err.status = 403;
-      err.code = "FORBIDDEN";
-
-      errorHandler(err, req, res, jest.fn());
-
-      expect(res.status).toHaveBeenCalledWith(403);
-    });
-
-    it("should handle error with status 422", () => {
-      const err = new Error("Validation failed");
-      err.status = 422;
-      err.code = "VALIDATION_ERROR";
-
-      errorHandler(err, req, res, jest.fn());
-
-      expect(res.status).toHaveBeenCalledWith(422);
-    });
-
-    it("should handle error with status 503", () => {
-      const err = new Error("Service unavailable");
-      err.status = 503;
-      err.code = "SERVICE_UNAVAILABLE";
-
-      errorHandler(err, req, res, jest.fn());
-
-      expect(res.status).toHaveBeenCalledWith(503);
-    });
-
-    it("should use default requestId when null", () => {
-      const err = new Error("Test error");
-      req.requestId = null;
-
-      errorHandler(err, req, res, jest.fn());
-
-      expect(jsonCalls[0].requestId).toBe("unknown");
-    });
-
-    it("should include all request details in log", () => {
-      const err = new Error("Detailed error");
-      err.status = 500;
-      err.stack = "Error: Detailed error\n    at test.js:1";
-
-      errorHandler(err, req, res, jest.fn());
-
-      expect(logger.error).toHaveBeenCalledWith("Detailed error", {
-        requestId: "req-123",
-        statusCode: 500,
-        method: "GET",
-        url: "/api/test",
-        ip: "127.0.0.1",
-        stack: "Error: Detailed error\n    at test.js:1",
-      });
-    });
-
-    it("should return sanitized error data in response", () => {
-      const err = new Error("Test error");
-      err.code = "TEST_CODE";
-
-      errorHandler(err, req, res, jest.fn());
-
-      expect(jsonCalls[0]).toHaveProperty("message");
-      expect(jsonCalls[0]).toHaveProperty("code");
-      expect(jsonCalls[0]).toHaveProperty("requestId");
-    });
-
-    it("should handle error with additional properties", () => {
-      const err = new Error("Extended error");
-      err.status = 500;
-      err.details = { field: "email", reason: "invalid" };
-
-      errorHandler(err, req, res, jest.fn());
-
-      expect(res.status).toHaveBeenCalledWith(500);
-    });
+    expect(res.json.mock.calls[0][0].requestId).toBe("unknown");
   });
 });

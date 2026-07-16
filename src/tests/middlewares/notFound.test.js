@@ -1,20 +1,36 @@
 /**
  * Tests for notFound middleware
+ * Tests that unmatched routes trigger the 404 response utility.
  */
-jest.mock("../../utils/response.util", () => ({
-  notFound: jest.fn(),
-}));
-
 const { notFound } = require("../../middlewares/notFound.middleware");
-const { notFound: sendNotFound } = require("../../utils/response.util");
+const responseUtil = require("../../utils/response.util");
 
 describe("notFound middleware", () => {
-  it("should call sendNotFound with res and message", () => {
-    const req = { originalUrl: "/api/nonexistent" };
-    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
 
-    notFound(req, res);
+  it("should call sendNotFound with 404 status", () => {
+    const mockRes = {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn().mockReturnThis(),
+    };
 
-    expect(sendNotFound).toHaveBeenCalledWith(res, "Route not found");
+    notFound({}, mockRes);
+
+    expect(mockRes.status).toHaveBeenCalledWith(404);
+    expect(mockRes.json).toHaveBeenCalled();
+  });
+
+  it("should not call next() - notFound does not pass to error handlers", () => {
+    const next = jest.fn();
+    const mockRes = {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn().mockReturnThis(),
+    };
+
+    notFound({}, mockRes);
+
+    expect(next).not.toHaveBeenCalled();
   });
 });

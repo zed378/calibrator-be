@@ -1,5 +1,5 @@
 const { SopDocument, SopTrainingAcknowledgment, User } = require("../models");
-const AppError = require("../utils/appError.util");
+const { AppError } = require("../utils/appError.util");
 
 exports.createDocument = async (tenantId, authorId, data) => {
   const { title, version, contentUrl, requiresTraining } = data;

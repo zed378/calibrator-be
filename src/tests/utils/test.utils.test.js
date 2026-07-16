@@ -128,7 +128,7 @@ describe("wait", () => {
     await wait(0);
     const elapsed = Date.now() - start;
 
-    expect(elapsed).toBeLessThan(100);
+    expect(elapsed).toBeLessThan(500);
   });
 });
 

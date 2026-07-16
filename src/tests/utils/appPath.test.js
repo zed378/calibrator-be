@@ -25,4 +25,20 @@ describe("appPath util", () => {
   it("should always produce an absolute path", () => {
     expect(path.isAbsolute(appPath("x"))).toBe(true);
   });
+
+  it("should return correct path when packaged", () => {
+    jest.resetModules();
+    process.pkg = {};
+    const originalExecPath = process.execPath;
+    process.execPath = "c:\\Program Files\\app\\exec.exe";
+    try {
+      const appPathPackaged = require("../../utils/appPath.util");
+      const result = appPathPackaged("uploads");
+      expect(result).toBe(path.join("c:\\Program Files\\app", "uploads"));
+    } finally {
+      delete process.pkg;
+      process.execPath = originalExecPath;
+      jest.resetModules();
+    }
+  });
 });

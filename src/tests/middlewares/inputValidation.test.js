@@ -1,5 +1,7 @@
 /**
- * Tests for inputValidation middleware (Joi schemas)
+ * Tests for inputValidation middleware (Joi validation schemas)
+ * Tests each exported Joi validation schema: register, login, verifyOtp,
+ * resendOtp, forgotPassword, resetPassword, changePassword.
  */
 const {
   registerValidation,
@@ -11,223 +13,288 @@ const {
   changePasswordValidation,
 } = require("../../middlewares/inputValidation.middleware");
 
-describe("inputValidation schemas", () => {
-  // ================================================================
-  // registerValidation
-  // ================================================================
+describe("inputValidation middleware", () => {
   describe("registerValidation", () => {
-    const validData = {
-      firstName: "John",
-      lastName: "Doe",
-      username: "johndoe",
-      email: "john@example.com",
-      password: "Password1",
-    };
+    it("should pass with valid data", () => {
+      const { error } = registerValidation.validate({
+        firstName: "John",
+        lastName: "Doe",
+        username: "johndoe",
+        email: "john@example.com",
+        password: "Password1",
+      });
+      expect(error).toBeFalsy();
+    });
 
-    it("should validate correct registration data", () => {
-      const { error } = registerValidation.validate(validData);
-      expect(error).toBeUndefined();
+    it("should allow null/empty lastName", () => {
+      const { error } = registerValidation.validate({
+        firstName: "John",
+        lastName: null,
+        username: "johndoe",
+        email: "john@example.com",
+        password: "Password1",
+      });
+      expect(error).toBeFalsy();
     });
 
     it("should reject missing firstName", () => {
-      const { error } = registerValidation.validate({ ...validData, firstName: undefined });
-      expect(error).toBeDefined();
+      const { error } = registerValidation.validate({
+        lastName: "Doe",
+        username: "johndoe",
+        email: "john@example.com",
+        password: "Password1",
+      });
+      expect(error).toBeTruthy();
+      expect(error.details[0].path).toContain("firstName");
     });
 
-    it("should reject short firstName", () => {
-      const { error } = registerValidation.validate({ ...validData, firstName: "J" });
-      expect(error).toBeDefined();
-    });
-
-    it("should reject missing email", () => {
-      const { error } = registerValidation.validate({ ...validData, email: undefined });
-      expect(error).toBeDefined();
+    it("should reject firstName shorter than 2 chars", () => {
+      const { error } = registerValidation.validate({
+        firstName: "J",
+        lastName: "Doe",
+        username: "johndoe",
+        email: "john@example.com",
+        password: "Password1",
+      });
+      expect(error).toBeTruthy();
     });
 
     it("should reject invalid email", () => {
-      const { error } = registerValidation.validate({ ...validData, email: "not-an-email" });
-      expect(error).toBeDefined();
+      const { error } = registerValidation.validate({
+        firstName: "John",
+        lastName: "Doe",
+        username: "johndoe",
+        email: "not-an-email",
+        password: "Password1",
+      });
+      expect(error).toBeTruthy();
     });
 
-    it("should reject weak password (no uppercase)", () => {
-      const { error } = registerValidation.validate({ ...validData, password: "password1" });
-      expect(error).toBeDefined();
+    it("should trim and lowercase username and email", () => {
+      const { value, error } = registerValidation.validate({
+        firstName: "John",
+        lastName: "Doe",
+        username: "  JohnDoe  ",
+        email: "  JOHN@EXAMPLE.COM  ",
+        password: "Password1",
+      });
+      expect(error).toBeFalsy();
+      expect(value.username).toBe("johndoe");
+      expect(value.email).toBe("john@example.com");
     });
 
-    it("should reject weak password (no number)", () => {
-      const { error } = registerValidation.validate({ ...validData, password: "Password" });
-      expect(error).toBeDefined();
+    it("should reject username with special characters", () => {
+      const { error } = registerValidation.validate({
+        firstName: "John",
+        lastName: "Doe",
+        username: "john doe!",
+        email: "john@example.com",
+        password: "Password1",
+      });
+      expect(error).toBeTruthy();
     });
 
-    it("should reject short password", () => {
-      const { error } = registerValidation.validate({ ...validData, password: "Pass1" });
-      expect(error).toBeDefined();
+    it("should reject weak password without uppercase", () => {
+      const { error } = registerValidation.validate({
+        firstName: "John",
+        lastName: "Doe",
+        username: "johndoe",
+        email: "john@example.com",
+        password: "password1",
+      });
+      expect(error).toBeTruthy();
     });
 
-    it("should allow empty lastName", () => {
-      const { error } = registerValidation.validate({ ...validData, lastName: "" });
-      expect(error).toBeUndefined();
+    it("should reject weak password without lowercase", () => {
+      const { error } = registerValidation.validate({
+        firstName: "John",
+        lastName: "Doe",
+        username: "johndoe",
+        email: "john@example.com",
+        password: "PASSWORD1",
+      });
+      expect(error).toBeTruthy();
     });
 
-    it("should allow null lastName", () => {
-      const { error } = registerValidation.validate({ ...validData, lastName: null });
-      expect(error).toBeUndefined();
+    it("should reject weak password without digit", () => {
+      const { error } = registerValidation.validate({
+        firstName: "John",
+        lastName: "Doe",
+        username: "johndoe",
+        email: "john@example.com",
+        password: "Password",
+      });
+      expect(error).toBeTruthy();
     });
 
-    it("should reject non-alphanumeric username", () => {
-      const { error } = registerValidation.validate({ ...validData, username: "john doe!" });
-      expect(error).toBeDefined();
-    });
-
-    it("should reject short username", () => {
-      const { error } = registerValidation.validate({ ...validData, username: "jd" });
-      expect(error).toBeDefined();
+    it("should reject password shorter than 8 chars", () => {
+      const { error } = registerValidation.validate({
+        firstName: "John",
+        lastName: "Doe",
+        username: "johndoe",
+        email: "john@example.com",
+        password: "Pass1",
+      });
+      expect(error).toBeTruthy();
     });
   });
 
-  // ================================================================
-  // loginValidation
-  // ================================================================
   describe("loginValidation", () => {
-    it("should validate login with email", () => {
-      const { error } = loginValidation.validate({ user: "user@test.com", password: "pass123" });
-      expect(error).toBeUndefined();
+    it("should pass with email as user", () => {
+      const { error } = loginValidation.validate({
+        user: "john@example.com",
+        password: "Password1",
+      });
+      expect(error).toBeFalsy();
     });
 
-    it("should validate login with username", () => {
-      const { error } = loginValidation.validate({ user: "johndoe", password: "pass123" });
-      expect(error).toBeUndefined();
+    it("should pass with alphanumeric username as user", () => {
+      const { error } = loginValidation.validate({
+        user: "johndoe",
+        password: "Password1",
+      });
+      expect(error).toBeFalsy();
     });
 
     it("should reject missing user", () => {
-      const { error } = loginValidation.validate({ password: "pass123" });
-      expect(error).toBeDefined();
+      const { error } = loginValidation.validate({
+        password: "Password1",
+      });
+      expect(error).toBeTruthy();
     });
 
     it("should reject missing password", () => {
-      const { error } = loginValidation.validate({ user: "test@test.com" });
-      expect(error).toBeDefined();
+      const { error } = loginValidation.validate({
+        user: "john@example.com",
+      });
+      expect(error).toBeTruthy();
     });
   });
 
-  // ================================================================
-  // verifyOtpValidation
-  // ================================================================
   describe("verifyOtpValidation", () => {
-    it("should validate correct OTP", () => {
-      const { error } = verifyOtpValidation.validate({ email: "test@test.com", otp: "123456" });
-      expect(error).toBeUndefined();
+    it("should pass with valid email and 6-digit OTP", () => {
+      const { error } = verifyOtpValidation.validate({
+        email: "john@example.com",
+        otp: "123456",
+      });
+      expect(error).toBeFalsy();
     });
 
-    it("should reject non-numeric OTP", () => {
-      const { error } = verifyOtpValidation.validate({ email: "test@test.com", otp: "abcdef" });
-      expect(error).toBeDefined();
+    it("should reject OTP that is not 6 digits", () => {
+      const { error } = verifyOtpValidation.validate({
+        email: "john@example.com",
+        otp: "12345",
+      });
+      expect(error).toBeTruthy();
     });
 
-    it("should reject short OTP", () => {
-      const { error } = verifyOtpValidation.validate({ email: "test@test.com", otp: "123" });
-      expect(error).toBeDefined();
+    it("should reject OTP containing letters", () => {
+      const { error } = verifyOtpValidation.validate({
+        email: "john@example.com",
+        otp: "12a456",
+      });
+      expect(error).toBeTruthy();
+    });
+
+    it("should reject missing email", () => {
+      const { error } = verifyOtpValidation.validate({
+        otp: "123456",
+      });
+      expect(error).toBeTruthy();
     });
   });
 
-  // ================================================================
-  // resendOtpValidation
-  // ================================================================
   describe("resendOtpValidation", () => {
-    it("should validate correct email", () => {
-      const { error } = resendOtpValidation.validate({ email: "test@test.com" });
-      expect(error).toBeUndefined();
+    it("should pass with valid email", () => {
+      const { error } = resendOtpValidation.validate({
+        email: "john@example.com",
+      });
+      expect(error).toBeFalsy();
     });
 
-    it("should reject invalid email", () => {
-      const { error } = resendOtpValidation.validate({ email: "invalid" });
-      expect(error).toBeDefined();
+    it("should reject missing email", () => {
+      const { error } = resendOtpValidation.validate({});
+      expect(error).toBeTruthy();
     });
   });
 
-  // ================================================================
-  // forgotPasswordValidation
-  // ================================================================
   describe("forgotPasswordValidation", () => {
-    it("should validate correct email", () => {
-      const { error } = forgotPasswordValidation.validate({ email: "test@test.com" });
-      expect(error).toBeUndefined();
+    it("should pass with valid email", () => {
+      const { error } = forgotPasswordValidation.validate({
+        email: "john@example.com",
+      });
+      expect(error).toBeFalsy();
     });
 
     it("should reject missing email", () => {
       const { error } = forgotPasswordValidation.validate({});
-      expect(error).toBeDefined();
+      expect(error).toBeTruthy();
     });
   });
 
-  // ================================================================
-  // resetPasswordValidation
-  // ================================================================
   describe("resetPasswordValidation", () => {
-    it("should validate correct reset data", () => {
+    it("should pass with valid data", () => {
       const { error } = resetPasswordValidation.validate({
-        email: "test@test.com",
+        email: "john@example.com",
         otp: "123456",
-        password: "NewPassword1",
+        password: "Password1",
       });
-      expect(error).toBeUndefined();
+      expect(error).toBeFalsy();
     });
 
-    it("should reject missing OTP", () => {
+    it("should reject missing email", () => {
       const { error } = resetPasswordValidation.validate({
-        email: "test@test.com",
-        password: "NewPassword1",
+        otp: "123456",
+        password: "Password1",
       });
-      expect(error).toBeDefined();
+      expect(error).toBeTruthy();
+    });
+
+    it("should reject invalid OTP length", () => {
+      const { error } = resetPasswordValidation.validate({
+        email: "john@example.com",
+        otp: "12345",
+        password: "Password1",
+      });
+      expect(error).toBeTruthy();
     });
 
     it("should reject short password", () => {
       const { error } = resetPasswordValidation.validate({
-        email: "test@test.com",
+        email: "john@example.com",
         otp: "123456",
-        password: "short",
+        password: "Pass1",
       });
-      expect(error).toBeDefined();
+      expect(error).toBeTruthy();
     });
   });
 
-  // ================================================================
-  // changePasswordValidation
-  // ================================================================
   describe("changePasswordValidation", () => {
-    it("should validate correct change password data", () => {
+    it("should pass with valid data and matching passwords", () => {
       const { error } = changePasswordValidation.validate({
-        oldPassword: "OldPass123",
-        newPassword: "NewPass123",
-        confirmPassword: "NewPass123",
+        oldPassword: "OldPass1",
+        newPassword: "NewPass1",
+        confirmPassword: "NewPass1",
       });
-      expect(error).toBeUndefined();
+      expect(error).toBeFalsy();
     });
 
-    it("should reject mismatched passwords", () => {
+    it("should reject mismatched new and confirm passwords", () => {
       const { error } = changePasswordValidation.validate({
-        oldPassword: "OldPass123",
-        newPassword: "NewPass123",
-        confirmPassword: "DifferentPass123",
+        oldPassword: "OldPass1",
+        newPassword: "NewPass1",
+        confirmPassword: "Different1",
       });
-      expect(error).toBeDefined();
+      expect(error).toBeTruthy();
+      expect(error.details[0].message).toBe("Passwords do not match");
     });
 
     it("should reject missing oldPassword", () => {
       const { error } = changePasswordValidation.validate({
-        newPassword: "NewPass123",
-        confirmPassword: "NewPass123",
+        newPassword: "NewPass1",
+        confirmPassword: "NewPass1",
       });
-      expect(error).toBeDefined();
-    });
-
-    it("should reject weak newPassword", () => {
-      const { error } = changePasswordValidation.validate({
-        oldPassword: "OldPass123",
-        newPassword: "weak",
-        confirmPassword: "weak",
-      });
-      expect(error).toBeDefined();
+      expect(error).toBeTruthy();
     });
   });
 });

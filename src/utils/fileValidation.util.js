@@ -272,7 +272,9 @@ exports.sanitizeFilename = (filename, allowedExtensions = []) => {
     throw new AppError(400, "Invalid filename");
   }
 
-  return cleanName;
+  // Return filename with lowercase extension
+  const nameWithoutExt = path.parse(cleanName).name;
+  return nameWithoutExt + ext;
 };
 
 // ==========================================

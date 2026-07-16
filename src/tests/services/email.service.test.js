@@ -28,7 +28,7 @@ process.env.MAIL_USER = "test@example.com";
 process.env.MAIL_PASSWORD = "password";
 process.env.MAIL_FROM = "noreply@example.com";
 
-const { sendEmail, sendActivationEmail, sendOtpEmail } = require("../../services/email.service");
+const { sendEmail, sendActivationEmail, sendOtpEmail, sendNotificationEmail } = require("../../services/email.service");
 
 describe("email.service", () => {
   beforeEach(() => {
@@ -117,6 +117,43 @@ describe("email.service", () => {
         }),
       );
       expect(result).toEqual({ messageId: "123" });
+    });
+  });
+
+  describe("sendNotificationEmail", () => {
+    it("should send notification email with all fields and CTA url", async () => {
+      const mockSendMail = require("nodemailer").createTransport().sendMail;
+      const result = await sendNotificationEmail({
+        email: "recipient@test.com",
+        firstName: "Alice",
+        title: "Test Title & Special chars",
+        message: "Hello <World>",
+        actionUrl: "https://view.details.com/123",
+      });
+
+      expect(mockSendMail).toHaveBeenCalledWith({
+        from: "noreply@example.com",
+        to: "recipient@test.com",
+        subject: "Test Title & Special chars",
+        html: expect.stringContaining("Test Title &amp; Special chars"),
+      });
+      expect(mockSendMail.mock.calls[0][0].html).toContain("Hi Alice");
+      expect(mockSendMail.mock.calls[0][0].html).toContain("Hello &lt;World&gt;");
+      expect(mockSendMail.mock.calls[0][0].html).toContain('href="https://view.details.com/123"');
+      expect(result).toEqual({ messageId: "123" });
+    });
+
+    it("should fall back to default name when firstName is missing and omit CTA when actionUrl is invalid", async () => {
+      const mockSendMail = require("nodemailer").createTransport().sendMail;
+      await sendNotificationEmail({
+        email: "recipient@test.com",
+        title: "Title",
+        message: "Message",
+        actionUrl: "invalid-url",
+      });
+
+      expect(mockSendMail.mock.calls[0][0].html).toContain("Hi there");
+      expect(mockSendMail.mock.calls[0][0].html).not.toContain("View details");
     });
   });
 });

@@ -133,7 +133,7 @@ exports.enforceSessionLimit = async (maxSessions = MAX_CONCURRENT_SESSIONS) => {
  * Detects potential session hijacking
  */
 exports.validateSessionBinding = async (req, res, next) => {
-  if (!req.session || !req.sessionId) {
+  if (!req?.session || !req?.sessionId) {
     return next();
   }
 
@@ -201,7 +201,7 @@ exports.enforceSessionTimeout = (
   absoluteTimeout = SESSION_ABSOLUTE_TIMEOUT_MS,
 ) => {
   return async (req, res, next) => {
-    if (!req.session || !req.sessionId) {
+    if (!req?.session || !req?.sessionId) {
       return next();
     }
 

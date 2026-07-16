@@ -5,7 +5,6 @@ const {
   revokeAllSessions,
 } = require("../services/session.service");
 
-const cronSchedule = process.env.SESSION_CLEANUP_SCHEDULER;
 
 /**
  * Clean up expired sessions and revoke invalid sessions
@@ -49,7 +48,7 @@ const revokeUserSessions = async (userId, reason = "ACCOUNT_SECURITY") => {
  * Default: Daily at 2:00 AM (0 2 * * *)
  */
 const initSessionCleanup = () => {
-  const schedule = cronSchedule || "0 2 * * *";
+  const schedule = process.env.SESSION_CLEANUP_SCHEDULER || "0 2 * * *";
 
   const message =
     schedule !== "0 2 * * *"

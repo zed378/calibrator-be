@@ -299,7 +299,7 @@ exports.getAncestorTenants = async (tenantId) => {
     const pathParts = hierarchy.path.split("/").filter((p) => p);
     const ancestors = [];
 
-    for (let i = 1; i < pathParts.length; i++) {
+    for (let i = 0; i < pathParts.length - 1; i++) {
       const partialPath = "/" + pathParts.slice(0, i + 1).join("/");
       const ancestor = await TenantHierarchy.findOne({
         where: { path: partialPath },

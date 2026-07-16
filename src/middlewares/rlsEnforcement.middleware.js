@@ -1,6 +1,7 @@
 const { db } = require("../config");
 const { tenantStorage } = require("./tenantContext.middleware");
 const { logger } = require("./activityLog.middleware");
+const { models } = require("../models");
 
 /**
  * Enforce Postgres Row-Level Security (RLS) for every request.
@@ -76,8 +77,6 @@ const initializePostgresRLS = async () => {
     logger.info("RLS initialization skipped: not using Postgres");
     return;
   }
-
-  const { models } = require("../models");
 
   for (const modelName in models) {
     const model = models[modelName];

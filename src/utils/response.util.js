@@ -58,9 +58,6 @@ const success = (
       status = statusCode;
     } else {
       status = typeof messageOrStatusCode === "number" ? messageOrStatusCode : 200;
-      if (typeof messageOrStatusCode === "string") {
-        message = messageOrStatusCode;
-      }
     }
   }
 

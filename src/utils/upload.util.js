@@ -250,12 +250,16 @@ exports.uploadMulti = (options = {}) => {
  */
 exports.deleteUpload = (filename, folder = "uploads") => {
   const fs = require("fs");
+  const path = require("path");
   const filePath = storagePath(folder, filename);
   const resolvedRoot = storagePath(folder);
 
   return new Promise((resolve, reject) => {
-    // Prevent Path Traversal
-    if (!filePath.startsWith(resolvedRoot)) {
+    // Prevent Path Traversal - resolve both paths before comparing
+    const normalizedFilePath = path.resolve(filePath);
+    const normalizedRoot = path.resolve(resolvedRoot);
+
+    if (!normalizedFilePath.startsWith(normalizedRoot)) {
       return reject(new AppError(400, "Invalid file path for deletion"));
     }
 

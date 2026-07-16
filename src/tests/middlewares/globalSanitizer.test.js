@@ -1,101 +1,151 @@
 /**
  * Tests for globalSanitizer middleware
+ * Tests recursive XSS sanitization of request body, query, and params,
+ * as well as excluded fields and non-object inputs.
  */
+const xss = require("xss");
+
+// We need a spy on the internal xss module to verify calls and to avoid
+// mutating global state.
+jest.mock("xss", () =>
+  jest.fn((str) => str.replace(/</g, "&lt;").replace(/>/g, "&gt;")),
+);
+
 const { globalSanitizer } = require("../../middlewares/globalSanitizer.middleware");
+const { createMockReq } = require("../utils/test.utils");
 
 describe("globalSanitizer middleware", () => {
   let req, res, next;
 
   beforeEach(() => {
-    req = { body: {}, query: {}, params: {} };
+    jest.clearAllMocks();
+    req = createMockReq();
     res = {};
     next = jest.fn();
   });
 
-  it("should call next()", () => {
+  it("should call next() after sanitizing body, query, and params", () => {
+    req.body = { name: "<script>alert(1)</script>" };
+    req.query = { q: "<img onerror=xss()>" };
+    req.params = { id: "<b>123</b>" };
+
     globalSanitizer(req, res, next);
+
     expect(next).toHaveBeenCalled();
   });
 
-  it("should sanitize XSS in body strings", () => {
-    req.body = { name: "<script>alert('xss')</script>Hello" };
+  it("should sanitize string values in req.body", () => {
+    req.body = { title: "<h1>Hello</h1>", safe: "normal text" };
     globalSanitizer(req, res, next);
-    expect(req.body.name).not.toContain("<script>");
-    expect(req.body.name).toContain("Hello");
+
+    // xss mock replaces < and >
+    expect(req.body.title).toBe("&lt;h1&gt;Hello&lt;/h1&gt;");
+    expect(req.body.safe).toBe("normal text");
+    next();
   });
 
-  it("should sanitize XSS in query strings", () => {
-    req.query = { search: "<img onerror=alert(1) src=x>" };
+  it("should not sanitize excluded fields (avatar_url, avatar, etc.)", () => {
+    req.body = {
+      avatar_url: "<script>steal()</script>",
+      avatar: "<img src=x>",
+      signature: "<b>bold</b>",
+      file_content: "<evil>",
+      content_base64: "abc<script>",
+    };
     globalSanitizer(req, res, next);
-    expect(req.query.search).not.toContain("onerror");
+
+    // Excluded fields should be returned as-is (no xss() call on them)
+    expect(req.body.avatar_url).toBe("<script>steal()</script>");
+    expect(req.body.avatar).toBe("<img src=x>");
+    expect(req.body.signature).toBe("<b>bold</b>");
+    expect(req.body.file_content).toBe("<evil>");
+    expect(req.body.content_base64).toBe("abc<script>");
+    next();
   });
 
-  it("should sanitize XSS in params", () => {
-    req.params = { id: "<script>alert(1)</script>" };
-    globalSanitizer(req, res, next);
-    expect(req.params.id).not.toContain("<script>");
-  });
-
-  it("should handle nested objects", () => {
+  it("should recursively sanitize nested objects", () => {
     req.body = {
       user: {
-        name: "<b>bold</b>",
+        name: "<script>x</script>",
         profile: {
-          bio: "<script>steal()</script>Clean bio",
+          bio: "<img onerror=xss>",
         },
       },
     };
     globalSanitizer(req, res, next);
-    expect(req.body.user.profile.bio).not.toContain("<script>");
-    expect(req.body.user.profile.bio).toContain("Clean bio");
+
+    expect(req.body.user.name).toBe("&lt;script&gt;x&lt;/script&gt;");
+    expect(req.body.user.profile.bio).toBe("&lt;img onerror=xss&gt;");
+    next();
   });
 
-  it("should handle arrays", () => {
-    req.body = { tags: ["<script>x</script>safe", "normal"] };
+  it("should sanitize array values inside req.body", () => {
+    req.body = { tags: ["<a>link</a>", "<b>bold", "normal"] };
     globalSanitizer(req, res, next);
-    expect(req.body.tags[0]).not.toContain("<script>");
-    expect(req.body.tags[0]).toContain("safe");
-    expect(req.body.tags[1]).toBe("normal");
+
+    expect(req.body.tags).toEqual(["&lt;a&gt;link&lt;/a&gt;", "&lt;b&gt;bold", "normal"]);
+    next();
   });
 
-  it("should not sanitize excluded fields", () => {
-    const base64Content = "data:image/png;base64,iVBORw0KGgo=<script>";
-    req.body = { avatar_url: base64Content };
+  it("should mutate req.query in place (safe for Express 5 getter-only query)", () => {
+    req.query = { filter: "<script>", page: "1" };
     globalSanitizer(req, res, next);
-    expect(req.body.avatar_url).toBe(base64Content);
+
+    expect(req.query.filter).toBe("&lt;script&gt;");
+    expect(req.query.page).toBe("1");
+    next();
   });
 
-  it("should not sanitize avatar field", () => {
-    const content = "<script>alert(1)</script>";
-    req.body = { avatar: content };
+  it("should sanitize req.params", () => {
+    req.params = { id: "<script>alert(1)</script>" };
     globalSanitizer(req, res, next);
-    expect(req.body.avatar).toBe(content);
+
+    expect(req.params.id).toBe("&lt;script&gt;alert(1)&lt;/script&gt;");
+    next();
   });
 
-  it("should preserve non-string values (numbers, booleans)", () => {
-    req.body = { count: 42, active: true, score: 3.14 };
-    globalSanitizer(req, res, next);
-    expect(req.body.count).toBe(42);
-    expect(req.body.active).toBe(true);
-    expect(req.body.score).toBe(3.14);
-  });
-
-  it("should handle null/undefined body gracefully", () => {
+  it("should skip undefined/null body gracefully", () => {
     req.body = null;
-    req.query = undefined;
-    req.params = null;
     globalSanitizer(req, res, next);
     expect(next).toHaveBeenCalled();
   });
 
-  it("should handle inherited prototype properties gracefully and not sanitize them", () => {
-    const protoObj = { inherited: "<script>unsafe</script>" };
-    const reqObj = Object.create(protoObj);
-    reqObj.own = "<script>unsafe</script>safe";
-    req.body = reqObj;
+  it("should handle empty body object", () => {
+    req.body = {};
     globalSanitizer(req, res, next);
-    expect(req.body.own).toBe("&lt;script&gt;unsafe&lt;/script&gt;safe");
-    expect(req.body.hasOwnProperty("inherited")).toBe(false);
-    expect(req.body.inherited).toBeUndefined();
+    expect(next).toHaveBeenCalled();
+  });
+
+  it("should skip undefined/null query gracefully", () => {
+    req.query = undefined;
+    globalSanitizer(req, res, next);
+    expect(next).toHaveBeenCalled();
+  });
+
+  it("should skip undefined/null params gracefully", () => {
+    req.params = undefined;
+    globalSanitizer(req, res, next);
+    expect(next).toHaveBeenCalled();
+  });
+
+  it("should preserve non-string primitives in body", () => {
+    req.body = { count: 42, active: true, nothing: null };
+    globalSanitizer(req, res, next);
+
+    expect(req.body.count).toBe(42);
+    expect(req.body.active).toBe(true);
+    expect(req.body.nothing).toBeNull();
+    next();
+  });
+
+  it("should not sanitize objects that are values of excluded fields", () => {
+    req.body = {
+      avatar: { url: "<script>", width: 100 },
+    };
+    globalSanitizer(req, res, next);
+
+    // avatar is excluded, so the whole value passes through un-sanitized
+    expect(req.body.avatar.url).toBe("<script>");
+    next();
   });
 });

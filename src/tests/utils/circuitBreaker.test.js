@@ -152,6 +152,39 @@ describe("circuitBreaker", () => {
       expect(events).toContain("open");
       expect(events).toContain("failure");
     });
+
+    it("should transition to open on failure in half-open state", async () => {
+      const cb = new CircuitBreaker({ threshold: 2 });
+      cb._state = STATES.HALF_OPEN;
+
+      try {
+        await cb.execute(async () => {
+          throw new Error("Failure");
+        });
+      } catch {
+        // ignore
+      }
+
+      expect(cb.getState().state).toBe("open");
+    });
+
+    it("should log error when event listener throws", () => {
+      const cb = new CircuitBreaker({ name: "listener_test" });
+      const { logger } = require("../../middlewares/activityLog.middleware");
+      
+      cb.on("open", () => {
+        throw new Error("Listener crash");
+      });
+
+      cb._state = STATES.CLOSED;
+      cb.open();
+
+      expect(logger.error).toHaveBeenCalledWith("Circuit breaker listener error", {
+        name: "listener_test",
+        event: "open",
+        error: "Listener crash",
+      });
+    });
   });
 
   describe("CircuitBreakerPool", () => {
@@ -261,6 +294,40 @@ describe("circuitBreaker", () => {
       resetAll();
 
       expect(getPoolStats().breakers).toBeDefined();
+    });
+  });
+
+  describe("extra branch edge cases", () => {
+    it("should handle default options when constructor is called without args", () => {
+      const cb = new CircuitBreaker();
+      const stats = cb.getState();
+      expect(stats.name).toBe("default");
+      expect(cb._threshold).toBe(5);
+      expect(cb._timeout).toBe(30000);
+      expect(cb._halfOpenMax).toBe(1);
+      expect(cb._successThreshold).toBe(3);
+    });
+
+    it("should handle registering invalid events and emitting invalid events", () => {
+      const cb = new CircuitBreaker();
+      cb.on("invalid_event", () => {});
+      expect(cb._listeners["invalid_event"]).toBeUndefined();
+
+      // Ensure emitting invalid event doesn't throw
+      expect(() => cb._emit("invalid_event")).not.toThrow();
+    });
+
+    it("should handle _transitionTo with invalid state", () => {
+      const cb = new CircuitBreaker();
+      cb._transitionTo("UNKNOWN_STATE");
+      expect(cb.getState().state).toBe("UNKNOWN_STATE");
+    });
+
+    it("should skip success processing when state is OPEN", async () => {
+      const cb = new CircuitBreaker();
+      cb._state = STATES.OPEN;
+      await cb._onSuccess();
+      expect(cb._failureCount).toBe(0); // should not hit closed state reset
     });
   });
 });

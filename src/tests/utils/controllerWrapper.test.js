@@ -1,8 +1,4 @@
-/**
- * Tests for controllerWrapper utility
- */
-
-const { asyncHandler } = require("../../utils/controllerWrapper.util");
+const { asyncHandler, asyncHandlerWithMapping } = require("../../utils/controllerWrapper.util");
 
 describe("asyncHandler", () => {
   it("should catch async errors and pass to express error handler", async () => {
@@ -70,5 +66,109 @@ describe("asyncHandler", () => {
     await mockFn(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
+  });
+});
+
+describe("asyncHandlerWithMapping", () => {
+  it("should pass successful response without calling sendError", async () => {
+    const mockFn = asyncHandlerWithMapping(async (req, res) => {
+      return { data: "ok" };
+    });
+    const req = {};
+    const res = {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn(),
+    };
+    const next = jest.fn();
+
+    await mockFn(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.json).not.toHaveBeenCalled();
+  });
+
+  it("should map error message patterns to status codes", async () => {
+    const mockFn = asyncHandlerWithMapping(
+      async () => {
+        throw new Error("Invalid credentials passed");
+      },
+      {
+        credentials: 401,
+        verify: 403,
+      }
+    );
+
+    const req = {};
+    const res = {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn(),
+    };
+    const next = jest.fn();
+
+    await mockFn(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it("should fall back to 500 status when no pattern matches", async () => {
+    const mockFn = asyncHandlerWithMapping(
+      async () => {
+        throw new Error("Some unhandled internal error");
+      },
+      {
+        credentials: 401,
+      }
+    );
+
+    const req = {};
+    const res = {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn(),
+    };
+    const next = jest.fn();
+
+    await mockFn(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
+
+  it("should handle error with missing message and stack, and catch response errors when next is not a function", async () => {
+    const mockFn = asyncHandler(async (req, res) => {
+      const err = new Error();
+      delete err.message;
+      delete err.stack;
+      throw err;
+    });
+
+    const req = {};
+    const res = {
+      status: jest.fn().mockImplementation(() => {
+        throw new Error("Response helper failed");
+      }),
+      json: jest.fn(),
+    };
+
+    await expect(mockFn(req, res)).resolves.not.toThrow();
+  });
+
+  it("should handle missing message in asyncHandlerWithMapping", async () => {
+    const mockFn = asyncHandlerWithMapping(
+      async () => {
+        const err = new Error();
+        delete err.message;
+        throw err;
+      },
+      {
+        credentials: 401,
+      }
+    );
+
+    const req = {};
+    const res = {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn(),
+    };
+
+    await mockFn(req, res);
+    expect(res.status).toHaveBeenCalledWith(500);
   });
 });

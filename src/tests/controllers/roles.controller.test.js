@@ -13,6 +13,11 @@ jest.mock("../../services/roles.service", () => {
     removeMenuFromRole: jest.fn(),
     assignRoleToUser: jest.fn(),
     removeRoleFromUser: jest.fn(),
+    getAllMenus: jest.fn(),
+    getMenuById: jest.fn(),
+    createMenu: jest.fn(),
+    updateMenu: jest.fn(),
+    deleteMenu: jest.fn(),
   };
   return mockService;
 });
@@ -282,6 +287,168 @@ describe("roles Controller", () => {
 
       expect(rolesService.removeRoleFromUser).toHaveBeenCalledWith("user-1");
       expect(res.status).toHaveBeenCalledWith(200);
+    });
+  });
+
+  // ==========================================
+  //                     MENU GROUPS
+  // ==========================================
+
+  describe("getAllMenus", () => {
+    it("should return all menus with pagination", async () => {
+      req.query = { page: "1", limit: "10" };
+      rolesService.getAllMenus.mockResolvedValue({
+        data: {
+          rows: [
+            { id: "mg-1", name: "Dashboard" },
+            { id: "mg-2", name: "Users" },
+          ],
+        },
+        count: 2,
+        page: 1,
+        limit: 10,
+      });
+
+      await rolesController.getAllMenus(req, res, next);
+
+      expect(rolesService.getAllMenus).toHaveBeenCalledWith({
+        limit: 10,
+        offset: 0,
+        search: "",
+      });
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        data: expect.objectContaining({
+          rows: expect.any(Array),
+        }),
+        pagination: expect.objectContaining({
+          page: 1,
+          limit: 10,
+          total: 2,
+        }),
+      });
+    });
+
+    it("should filter menus by search", async () => {
+      req.query = { page: "1", limit: "10", search: "dashboard" };
+      rolesService.getAllMenus.mockResolvedValue({
+        data: { rows: [], count: 0, page: 1, limit: 10 },
+      });
+
+      await rolesController.getAllMenus(req, res, next);
+
+      expect(rolesService.getAllMenus).toHaveBeenCalledWith({
+        limit: 10,
+        offset: 0,
+        search: "dashboard",
+      });
+    });
+
+    it("should use defaults when no query params", async () => {
+      req.query = {};
+      rolesService.getAllMenus.mockResolvedValue({
+        data: { rows: [], count: 0, page: 1, limit: 20 },
+      });
+
+      await rolesController.getAllMenus(req, res, next);
+
+      expect(rolesService.getAllMenus).toHaveBeenCalledWith({
+        limit: 20,
+        offset: 0,
+        search: "",
+      });
+    });
+  });
+
+  describe("getMenuById", () => {
+    it("should return a specific menu group", async () => {
+      req.params = { id: "mg-1" };
+      rolesService.getMenuById.mockResolvedValue({
+        id: "mg-1",
+        name: "Dashboard",
+      });
+
+      await rolesController.getMenuById(req, res, next);
+
+      expect(rolesService.getMenuById).toHaveBeenCalledWith("mg-1");
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        data: { id: "mg-1", name: "Dashboard" },
+      });
+    });
+
+    it("should return 404 when menu group not found", async () => {
+      req.params = { id: "invalid" };
+      rolesService.getMenuById.mockResolvedValue(null);
+
+      await rolesController.getMenuById(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        message: "Menu group not found",
+      });
+    });
+  });
+
+  describe("createMenu", () => {
+    it("should create a new menu group", async () => {
+      const menuMock = {
+        id: "mg-new",
+        name: "Reports",
+        icon: "bar-chart-2",
+        route: "/reports"
+      };
+      jest.spyOn(rolesService, 'createMenu').mockReturnValueOnce(menuMock);
+
+      await rolesController.createMenu(req, res, next);
+
+      expect(rolesService.createMenu).toHaveBeenCalledWith(req.body);
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        data: expect.objectContaining({
+          id: "mg-new",
+          name: "Reports",
+        },
+      });
+    });
+  });
+
+  describe("updateMenu", () => {
+    it("should update a menu group", async () => {
+      const menuMock = {
+        id: "mg-1",
+        name: "Dashboard",
+        icon: "settings"
+      };
+      jest.spyOn(rolesService, 'updateMenu').mockReturnValueOnce(menuMock);
+
+      await rolesController.updateMenu(req, res, next);
+
+      expect(rolesService.updateMenu).toHaveBeenCalledWith("mg-1", req.body);
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        data: expect.objectContaining({
+          id: "mg-1",
+        },
+      });
+    });
+  });
+
+  describe("deleteMenu", () => {
+    it("should delete a menu group", async () => {
+      jest.spyOn(rolesService, 'deleteMenu').mockReturnValueOnce({ message: "Menu group deleted" });
+
+      await rolesController.deleteMenu(req, res, next);
+
+      expect(rolesService.deleteMenu).toHaveBeenCalledWith("mg-1");
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        message: expect.stringContaining("deleted")
+      });
     });
   });
 });

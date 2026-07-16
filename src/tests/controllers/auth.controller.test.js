@@ -17,6 +17,21 @@ jest.mock("../../services/auth.service", () => ({
   refreshUserToken: jest.fn(),
   verifyUserSession: jest.fn(),
   justUpdatePassword: jest.fn(),
+  setupMfa: jest.fn(),
+  verifyMfaSetup: jest.fn(),
+  loginMfa: jest.fn(),
+  impersonateUser: jest.fn(),
+}));
+
+// Mock mfa service
+jest.mock("../../services/mfa.service", () => ({
+  generateSecret: jest.fn(),
+  verifyAndEnable: jest.fn(),
+}));
+
+// Mock JWT utils for loginMfa
+jest.mock("../../utils/jwt.util", () => ({
+  verifyAccessToken: jest.fn(),
 }));
 
 // Mock response helper FIRST
@@ -30,7 +45,12 @@ jest.mock("../../utils/response.util", () => ({
 const authController = require("../../controllers/auth.controller");
 const { authMiddleware } = require("../../middlewares/auth.middleware");
 const authService = require("../../services/auth.service");
-const { success, error, login, badRequest } = require("../../utils/response.util");
+const {
+  success,
+  error,
+  login,
+  badRequest,
+} = require("../../utils/response.util");
 
 describe("authController", () => {
   let req;
@@ -83,7 +103,10 @@ describe("authController", () => {
 
       await authController.register(req, res);
 
-      expect(authService.registerUser).toHaveBeenCalledWith(mockUserData, "http://localhost:3000");
+      expect(authService.registerUser).toHaveBeenCalledWith(
+        mockUserData,
+        "http://localhost:3000",
+      );
       expect(success).toHaveBeenCalled();
     });
 
@@ -93,7 +116,9 @@ describe("authController", () => {
         password: "TestPass123",
       };
 
-      authService.registerUser.mockRejectedValue(new Error("Email already registered"));
+      authService.registerUser.mockRejectedValue(
+        new Error("Email already registered"),
+      );
 
       await authController.register(req, res);
 
@@ -130,7 +155,9 @@ describe("authController", () => {
     it("should return 400 when activation token is invalid", async () => {
       req.query = { token: "invalid-token" };
 
-      authService.activateAccount.mockRejectedValue(new Error("Invalid or expired activation token"));
+      authService.activateAccount.mockRejectedValue(
+        new Error("Invalid or expired activation token"),
+      );
 
       await authController.activation(req, res);
 
@@ -284,7 +311,10 @@ describe("authController", () => {
 
       await authController.justUpdatePassword(req, res);
 
-      expect(authService.justUpdatePassword).toHaveBeenCalledWith("user-1", "NewPass123");
+      expect(authService.justUpdatePassword).toHaveBeenCalledWith(
+        "user-1",
+        "NewPass123",
+      );
       expect(success).toHaveBeenCalled();
     });
   });
@@ -303,7 +333,10 @@ describe("authController", () => {
 
       await authController.passIsValid(req, res);
 
-      expect(authService.passIsValid).toHaveBeenCalledWith("user-1", "TestPass123");
+      expect(authService.passIsValid).toHaveBeenCalledWith(
+        "user-1",
+        "TestPass123",
+      );
       expect(success).toHaveBeenCalled();
     });
   });
@@ -359,6 +392,142 @@ describe("authController", () => {
       req.body = {};
 
       await authController.refresh(req, res);
+
+      expect(error).toHaveBeenCalled();
+    });
+  });
+
+  describe("socketToken", () => {
+    it("should return socket JWT token successfully", async () => {
+      req.user = { id: "user-1" };
+      process.env.JWT_ACCESS_SECRET = "test-secret-key-for-jwt-signing";
+
+      await authController.socketToken(req, res);
+
+      expect(success).toHaveBeenCalled();
+      const callArgs = success.mock.calls[0];
+      expect(callArgs[1]).toHaveProperty("token");
+      expect(callArgs[1]).toHaveProperty("expiresIn", 300);
+    });
+
+    it("should return socket JWT token without sessionId", async () => {
+      req.user = { id: "user-2" };
+      process.env.JWT_ACCESS_SECRET = "test-secret-key-for-jwt-signing";
+
+      await authController.socketToken(req, res);
+
+      expect(success).toHaveBeenCalled();
+      const callArgs = success.mock.calls[0];
+      expect(callArgs[1].token).toBeDefined();
+      expect(callArgs[1].expiresIn).toBe(300);
+    });
+  });
+
+  describe("setupMfa", () => {
+    it("should generate MFA secret and QR code successfully", async () => {
+      const mfaService = require("../../services/mfa.service");
+      mfaService.generateSecret.mockResolvedValue({
+        secret: "JBSWY3DPEHPK3PXP",
+        qrCodeDataUrl: "data:image/png;base64,iVBOR...",
+      });
+
+      await authController.setupMfa(req, res);
+
+      expect(mfaService.generateSecret).toHaveBeenCalledWith(req.user);
+      expect(success).toHaveBeenCalled();
+      const callArgs = success.mock.calls[0];
+      expect(callArgs[1]).toEqual({
+        qrCodeDataUrl: "data:image/png;base64,iVBOR...",
+      });
+    });
+  });
+
+  describe("verifyMfaSetup", () => {
+    it("should verify MFA setup successfully", async () => {
+      const mfaService = require("../../services/mfa.service");
+      req.body = { token: "123456" };
+      mfaService.verifyAndEnable.mockResolvedValue(true);
+
+      await authController.verifyMfaSetup(req, res);
+
+      expect(mfaService.verifyAndEnable).toHaveBeenCalledWith(
+        req.user,
+        "123456",
+      );
+      expect(success).toHaveBeenCalled();
+    });
+
+    it("should return 400 when token is missing", async () => {
+      req.body = {};
+
+      await authController.verifyMfaSetup(req, res);
+
+      expect(error).toHaveBeenCalled();
+    });
+  });
+
+  describe("loginMfa", () => {
+    it("should return 501 because MFA login flow is not fully implemented", async () => {
+      req.body = { code: "123456", token: "temp-mfa-token" };
+
+      await authController.loginMfa(req, res);
+
+      expect(error).toHaveBeenCalled();
+    });
+
+    it("should return 400 when both code and token are missing", async () => {
+      req.body = {};
+
+      await authController.loginMfa(req, res);
+
+      expect(error).toHaveBeenCalled();
+    });
+  });
+
+  describe("impersonateUser", () => {
+    it("should impersonate user successfully", async () => {
+      req.body = { tenantId: "tenant-1", userId: "target-user-1" };
+      req.ip = "127.0.0.1";
+      req.headers["user-agent"] = "test-agent";
+
+      authService.impersonateUser.mockResolvedValue({
+        data: { user: { id: "target-user-1" } },
+        token: "access-token",
+        session: { id: "session-1" },
+      });
+
+      await authController.impersonateUser(req, res);
+
+      expect(authService.impersonateUser).toHaveBeenCalledWith(
+        "user-1",
+        "tenant-1",
+        "target-user-1",
+        "127.0.0.1",
+        "test-agent",
+      );
+      expect(login).toHaveBeenCalled();
+    });
+
+    it("should return 400 when tenantId is missing", async () => {
+      req.body = { userId: "target-user-1" };
+
+      await authController.impersonateUser(req, res);
+
+      expect(error).toHaveBeenCalled();
+    });
+
+    it("should return 400 when userId is missing", async () => {
+      req.body = { tenantId: "tenant-1" };
+
+      await authController.impersonateUser(req, res);
+
+      expect(error).toHaveBeenCalled();
+    });
+
+    it("should return 400 when both tenantId and userId are missing", async () => {
+      req.body = {};
+
+      await authController.impersonateUser(req, res);
 
       expect(error).toHaveBeenCalled();
     });

@@ -1,5 +1,5 @@
 const { NonConformance, Capa, User, CalibrationDevice } = require("../models");
-const AppError = require("../utils/appError.util");
+const { AppError } = require("../utils/appError.util");
 
 // ==========================================
 // NON-CONFORMANCE

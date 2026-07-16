@@ -1,370 +1,210 @@
 /**
- * Tests for RBAC middleware
+ * Tests for rbac middleware
+ * Tests role-based access control with role name matching, level comparison,
+ * allowHigher option, super-admin bypass, and notSuperAdmin middleware.
  */
-const {
-  rbac,
-  checkRoleLevel,
-  notSuperAdmin,
-} = require("../../middlewares/rbac.middleware");
-const { ROLE_NAMES } = require("../../constants");
+const { ROLE_NAMES, ROLE_LEVELS } = require("../../constants");
+const { rbac, checkRoleLevel, notSuperAdmin } = require("../../middlewares/rbac.middleware");
+const { createMockReq, createMockNext } = require("../utils/test.utils");
 
-describe("RBAC Middleware", () => {
+describe("rbac middleware", () => {
   let req, res, next;
 
   beforeEach(() => {
-    req = {
-      user: {
-        id: 1,
-        role: {
-          name: ROLE_NAMES.USER, // "USER"
-          roleLevel: 1,
-        },
-      },
-    };
+    jest.clearAllMocks();
+    req = createMockReq();
     res = {
       status: jest.fn().mockReturnThis(),
-      json: jest.fn(),
+      json: jest.fn().mockReturnThis(),
     };
-    next = jest.fn();
+    next = createMockNext();
   });
 
-  // ================================================================
-  // rbac()
-  // ================================================================
-  describe("rbac()", () => {
-    it("should call next() when user role is in required roles", () => {
-      const middleware = rbac([ROLE_NAMES.USER]);
-      middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith();
-    });
+  // --- rbac() ---
 
-    it("should call next() when user is SUPER_ADMIN (bypass)", () => {
-      req.user.role.name = "SUPER_ADMIN"; // hardcoded string in rbac.js
-      req.user.role.roleLevel = 10;
-      const middleware = rbac([ROLE_NAMES.USER]);
-      middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith();
-    });
-
-    it("should pass error to next when no user on request", () => {
+  describe("rbac", () => {
+    it("should reject when req.user is missing", () => {
       req.user = null;
+      const middleware = rbac(["USER"]);
+      middleware(req, res, next);
+      expect(next).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 401, message: expect.stringContaining("Unauthorized") }),
+      );
+    });
+
+    it("should reject when user has no role name", () => {
+      req.user = { role: {} };
+      const middleware = rbac(["USER"]);
+      middleware(req, res, next);
+      expect(next).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 401 }),
+      );
+    });
+
+    it("should allow SUPER_ADMIN to bypass all checks", () => {
+      req.user = { role: { name: ROLE_NAMES.SUPER_ADMIN } };
+      const middleware = rbac(["USER"]);
+      middleware(req, res, next);
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should allow SUPERADMIN (alias) to bypass all checks", () => {
+      req.user = { role: { name: "SUPERADMIN" } };
+      const middleware = rbac(["USER"]);
+      middleware(req, res, next);
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should allow when user role is explicitly in the allowlist", () => {
+      req.user = { role: { name: ROLE_NAMES.USER } };
       const middleware = rbac([ROLE_NAMES.USER]);
       middleware(req, res, next);
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should allow with allowHigher=true when user level exceeds minimum", () => {
+      req.user = { role: { name: ROLE_NAMES.SUPERVISOR, role_level: ROLE_LEVELS.SUPERVISOR } };
+      const middleware = rbac([ROLE_NAMES.TECHNICIAN]); // level 5
+      middleware(req, res, next);
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should reject when user level is below minimum with allowHigher=true", () => {
+      req.user = { role: { name: ROLE_NAMES.USER, role_level: ROLE_LEVELS.USER } };
+      const middleware = rbac([ROLE_NAMES.SUPERVISOR]); // level 6
+      middleware(req, res, next);
       expect(next).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: 401,
-          message: expect.stringContaining("Unauthorized"),
-        }),
+        expect.objectContaining({ status: 403, message: expect.stringContaining("Forbidden") }),
       );
     });
 
-    it("should pass error to next when user has no role name", () => {
-      req.user.role = {};
-      const middleware = rbac([ROLE_NAMES.USER]);
+    it("should allow when user role name exactly matches with allowHigher=false", () => {
+      req.user = { role: { name: ROLE_NAMES.TECHNICIAN, role_level: ROLE_LEVELS.TECHNICIAN } };
+      const middleware = rbac([ROLE_NAMES.TECHNICIAN], { allowHigher: false });
+      middleware(req, res, next);
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should reject when user level is higher but allowHigher is false", () => {
+      req.user = { role: { name: ROLE_NAMES.ENGINEERING_MANAGER, role_level: ROLE_LEVELS.ENGINEERING_MANAGER } };
+      const middleware = rbac([ROLE_NAMES.TECHNICIAN], { allowHigher: false });
       middleware(req, res, next);
       expect(next).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: 401,
-          message: expect.stringContaining("Unauthorized"),
-        }),
+        expect.objectContaining({ status: 403 }),
       );
     });
 
-    it("should pass error when role is not in required list and level is lower", () => {
-      req.user.role.name = ROLE_NAMES.USER; // "USER", level 1
-      req.user.role.roleLevel = 1;
-      // ROLE_NAMES.SUPER_ADMIN = "SUPERADMIN" which maps to level 10 in roleLevels
-      const middleware = rbac([ROLE_NAMES.SUPER_ADMIN]);
+    it("should allow any authenticated user when rbac() is called with no requiredRoles", () => {
+      req.user = { role: { name: ROLE_NAMES.USER, role_level: ROLE_LEVELS.USER } };
+      const middleware = rbac();
       middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: 403,
-          message: expect.stringContaining("Forbidden"),
-        }),
-      );
+      expect(next).toHaveBeenCalled();
     });
 
-    it("should allow higher role level when allowHigher is true", () => {
-      req.user.role.name = ROLE_NAMES.HEALTCARE_ADMIN; // level 8
-      req.user.role.roleLevel = 8;
-      const middleware = rbac([ROLE_NAMES.USER], { allowHigher: true }); // level 1
+    it("should use roleLevel fallback when role_level is missing", () => {
+      req.user = { role: { name: ROLE_NAMES.SUPERVISOR, roleLevel: ROLE_LEVELS.SUPERVISOR } };
+      const middleware = rbac([ROLE_NAMES.TECHNICIAN]);
       middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith();
+      expect(next).toHaveBeenCalled();
     });
 
-    it("should deny when allowHigher is false and role not in list", () => {
-      req.user.role.name = ROLE_NAMES.HEALTCARE_ADMIN;
-      req.user.role.roleLevel = 8;
-      const middleware = rbac([ROLE_NAMES.USER], { allowHigher: false });
+    it("should pass when no listed roles map to known levels (minRequiredLevel=0)", () => {
+      req.user = { role: { name: "FAKE_ROLE" } };
+      const middleware = rbac(["NONEXISTENT_ROLE"]);
       middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: 403,
-        }),
-      );
-    });
-
-    it("should use role_level if roleLevel is not set", () => {
-      req.user.role = { name: ROLE_NAMES.HEALTCARE_ADMIN, role_level: 8 };
-      const middleware = rbac([ROLE_NAMES.HEALTCARE_ADMIN]);
-      middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith();
-    });
-
-    it("should handle empty requiredRoles array", () => {
-      const middleware = rbac([]);
-      middleware(req, res, next);
-      // User role "USER" is not in empty array, minRequiredLevel=0, user level=1 -> allowed via allowHigher
-      expect(next).toHaveBeenCalledWith();
+      // When no roles map to known levels, minRequiredLevel=0 and userRoleLevel=0
+      // so the allowHigher check passes (0 >= 0)
+      expect(next).toHaveBeenCalled();
     });
   });
 
-  // ================================================================
-  // checkRoleLevel()
-  // ================================================================
-  describe("checkRoleLevel()", () => {
-    it("should call next() when user role level meets minimum", () => {
-      req.user.role.roleLevel = 5;
-      const middleware = checkRoleLevel(3);
+  // --- checkRoleLevel ---
+
+  describe("checkRoleLevel", () => {
+    it("should pass when user role level meets the minimum", () => {
+      req.user = { role: { roleLevel: 5 } };
+      const middleware = checkRoleLevel(5);
       middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith();
+      expect(next).toHaveBeenCalled();
     });
 
-    it("should call next() when user role level equals minimum", () => {
-      req.user.role.roleLevel = 2;
-      const middleware = checkRoleLevel(2);
-      middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith();
-    });
-
-    it("should pass error when user role level is below minimum", () => {
-      req.user.role.roleLevel = 1;
+    it("should reject when user role level is below minimum", () => {
+      req.user = { role: { roleLevel: 3 } };
       const middleware = checkRoleLevel(5);
       middleware(req, res, next);
       expect(next).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: 403,
-          message: expect.stringContaining("Forbidden"),
-        }),
+        expect.objectContaining({ status: 403, message: expect.stringContaining("Forbidden") }),
       );
     });
 
-    it("should pass error when user has no role", () => {
+    it("should reject when req.user is missing", () => {
+      req.user = null;
+      const middleware = checkRoleLevel(1);
+      middleware(req, res, next);
+      expect(next).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 401 }),
+      );
+    });
+
+    it("should reject when req.user.role is missing", () => {
       req.user = {};
       const middleware = checkRoleLevel(1);
       middleware(req, res, next);
       expect(next).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: 401,
-        }),
+        expect.objectContaining({ status: 401 }),
       );
     });
 
-    it("should default to minLevel 1", () => {
-      req.user.role.roleLevel = 1;
-      const middleware = checkRoleLevel();
-      middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith();
-    });
-
-    it("should pass error when role is null", () => {
-      req.user.role = null;
+    it("should treat missing roleLevel as 0", () => {
+      req.user = { role: {} };
       const middleware = checkRoleLevel(1);
       middleware(req, res, next);
       expect(next).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: 401,
-        }),
+        expect.objectContaining({ status: 403 }),
       );
     });
   });
 
-  // ================================================================
-  // notSuperAdmin()
-  // ================================================================
-  describe("notSuperAdmin()", () => {
-    it("should call next() for regular user", () => {
+  // --- notSuperAdmin ---
+
+  describe("notSuperAdmin", () => {
+    it("should pass for non-super-admin users", () => {
+      req.user = { role: { name: ROLE_NAMES.USER } };
       const middleware = notSuperAdmin();
       middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith();
+      expect(next).toHaveBeenCalled();
     });
 
-    it("should pass error for super admin user", () => {
-      req.user.role.name = "SUPER_ADMIN";
-      const middleware = notSuperAdmin();
-      middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: 403,
-          message: expect.stringContaining("Super admin cannot perform"),
-        }),
-      );
-    });
-
-    it("should call next() for HEALTHCARE_ADMIN", () => {
-      req.user.role.name = ROLE_NAMES.HEALTCARE_ADMIN;
-      const middleware = notSuperAdmin();
-      middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith();
-    });
-
-    it("should call next() when user has no role", () => {
-      req.user.role = null;
-      const middleware = notSuperAdmin();
-      middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith();
-    });
-
-    it("should call next() when user is null", () => {
+    it("should pass when req.user is null", () => {
       req.user = null;
       const middleware = notSuperAdmin();
       middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith();
+      expect(next).toHaveBeenCalled();
     });
 
-    it("should default user role level to 0 if not set in checkRoleLevel()", () => {
-      delete req.user.role.roleLevel;
-      const middleware = checkRoleLevel(1);
-      middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: 403,
-          message: "Forbidden: Insufficient role level",
-        }),
-      );
-    });
-
-    it("should default to empty array and empty options if none provided in rbac()", () => {
-      const middleware = rbac();
-      middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith();
-    });
-
-    it("should handle error objects without message in rbac()", () => {
-      Object.defineProperty(req, "user", {
-        get() {
-          throw { name: "TestError" };
-        },
-        configurable: true,
-      });
-      const middleware = rbac();
-      middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: 500,
-          message: "Internal Server Error",
-        }),
-      );
-    });
-
-    it("should handle error objects without message in checkRoleLevel()", () => {
-      Object.defineProperty(req, "user", {
-        get() {
-          throw {};
-        },
-        configurable: true,
-      });
-      const middleware = checkRoleLevel(1);
-      middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: 500,
-          message: "Internal Server Error",
-        }),
-      );
-    });
-
-    it("should handle error objects without message in notSuperAdmin()", () => {
-      Object.defineProperty(req, "user", {
-        get() {
-          throw {};
-        },
-        configurable: true,
-      });
+    it("should reject SUPER_ADMIN", () => {
+      req.user = { role: { name: ROLE_NAMES.SUPER_ADMIN } };
       const middleware = notSuperAdmin();
       middleware(req, res, next);
       expect(next).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: 500,
-          message: "Internal Server Error",
-        }),
+        expect.objectContaining({ status: 403, message: expect.stringContaining("Forbidden") }),
       );
     });
 
-    it("should reject SUPERADMIN variant in notSuperAdmin()", () => {
-      req.user.role.name = "SUPERADMIN";
+    it("should reject SUPERADMIN alias", () => {
+      req.user = { role: { name: "SUPERADMIN" } };
       const middleware = notSuperAdmin();
       middleware(req, res, next);
       expect(next).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: 403,
-          message: expect.stringContaining("Super admin cannot perform"),
-        }),
+        expect.objectContaining({ status: 403 }),
       );
     });
 
-    it("should allow user with roleLevel 0 in checkRoleLevel(0)", () => {
-      req.user.role.roleLevel = 0;
-      const middleware = checkRoleLevel(0);
+    it("should pass for users without a role", () => {
+      req.user = {};
+      const middleware = notSuperAdmin();
       middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith();
-    });
-
-    it("should deny user with roleLevel 0 when checkRoleLevel(1)", () => {
-      req.user.role.roleLevel = 0;
-      const middleware = checkRoleLevel(1);
-      middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: 403,
-        }),
-      );
-    });
-
-    it("should use role_level property in rbac()", () => {
-      req.user.role = { name: ROLE_NAMES.HEALTCARE_ADMIN, role_level: 8 };
-      const middleware = rbac([ROLE_NAMES.USER]);
-      middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith();
-    });
-
-    it("should deny when user role is undefined in rbac()", () => {
-      req.user.role = undefined;
-      const middleware = rbac([ROLE_NAMES.USER]);
-      middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: 401,
-        }),
-      );
-    });
-
-    it("should handle unknown role names in requiredRoles", () => {
-      req.user.role.name = ROLE_NAMES.USER;
-      req.user.role.roleLevel = 1;
-      const middleware = rbac(["UNKNOWN_ROLE"]);
-      middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith();
-    });
-
-    it("should allow multiple required roles", () => {
-      req.user.role.name = ROLE_NAMES.HEALTCARE_ADMIN;
-      req.user.role.roleLevel = 8;
-      const middleware = rbac([ROLE_NAMES.USER, ROLE_NAMES.HEALTCARE_ADMIN]);
-      middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith();
-    });
-
-    it("should deny when user role not in multiple required roles and level too low", () => {
-      req.user.role.name = ROLE_NAMES.USER;
-      req.user.role.roleLevel = 1;
-      const middleware = rbac([ROLE_NAMES.HEALTCARE_ADMIN, ROLE_NAMES.ADMIN]);
-      middleware(req, res, next);
-      expect(next).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: 403,
-        }),
-      );
+      expect(next).toHaveBeenCalled();
     });
   });
 });

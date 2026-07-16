@@ -147,4 +147,24 @@ describe("mergeComponents", () => {
       bearerAuth: { type: "http", scheme: "cookie" },
     });
   });
+
+  it("should handle missing components in swaggerSpec during module execution", () => {
+    const fs = require("fs");
+    jest.isolateModules(() => {
+      jest.mock("swagger-jsdoc", () => {
+        return jest.fn().mockReturnValue({});
+      });
+
+      const writeFileSyncSpy = jest
+        .spyOn(fs, "writeFileSync")
+        .mockImplementation(() => {});
+
+      const { mergeComponents } = require("../../utils/generateSwagger.util");
+
+      expect(typeof mergeComponents).toBe("function");
+      expect(writeFileSyncSpy).toHaveBeenCalled();
+
+      writeFileSyncSpy.mockRestore();
+    });
+  });
 });

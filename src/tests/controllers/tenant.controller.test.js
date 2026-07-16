@@ -135,6 +135,20 @@ describe("tenant Controller", () => {
 
       expect(res.status).toHaveBeenCalledWith(400);
     });
+
+    it("should handle missing page and limit", async () => {
+      req.query = {};
+      tenantService.fetchTenants.mockResolvedValue({
+        data: { rows: [{ id: "tenant-1", name: "Test" }], meta: { total: 1 } },
+        message: "Fetch tenants successful",
+        status: 200,
+      });
+
+      await tenantController.getAllTenants(req, res, next);
+
+      expect(tenantService.fetchTenants).toHaveBeenCalled();
+      expect(success).toHaveBeenCalled();
+    });
   });
 
   describe("getSpecificTenant", () => {
@@ -170,6 +184,24 @@ describe("tenant Controller", () => {
           success: false,
           status: 404,
         }),
+      );
+    });
+
+    it("should use default message when result has no message", async () => {
+      req.params = { tenantId: VALID_TENANT_ID };
+      tenantService.fetchSpecificTenant.mockResolvedValue({
+        data: { id: VALID_TENANT_ID, name: "Test Tenant" },
+        status: 200,
+      });
+
+      await tenantController.getSpecificTenant(req, res, next);
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        expect.anything(),
+        null,
+        "Fetch tenant successful",
+        200,
       );
     });
 
@@ -213,7 +245,28 @@ describe("tenant Controller", () => {
       );
     });
 
-    it("should return 404 when tenant not found", async () => {
+    it("should handle empty tenantId", async () => {
+      req.query = { tenantId: "" };
+      await tenantController.getPublicBranding(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+    });
+
+    it("should handle tenantId from body", async () => {
+      req.body = { tenantId: VALID_TENANT_ID };
+      tenantService.getPublicBranding.mockResolvedValue({
+        id: VALID_TENANT_ID,
+        primaryColor: "#000000",
+      });
+
+      await tenantController.getPublicBranding(req, res, next);
+
+      expect(tenantService.getPublicBranding).toHaveBeenCalledWith(
+        VALID_TENANT_ID,
+      );
+    });
+
+    it("should return 404 when branding not found", async () => {
       req.headers["x-tenant-id"] = VALID_TENANT_ID;
       tenantService.getPublicBranding.mockResolvedValue(null);
 
@@ -290,6 +343,27 @@ describe("tenant Controller", () => {
       expect(next).toHaveBeenCalled();
     });
 
+    it("should use default message when result has no message", async () => {
+      req.body = {
+        name: "Test Tenant",
+        code: "test",
+      };
+      tenantService.createTenant.mockResolvedValue({
+        data: { id: "tenant-new", name: "Test Tenant" },
+        status: 201,
+      });
+
+      await tenantController.createTenant(req, res, next);
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        expect.anything(),
+        null,
+        "Tenant created successfully",
+        201,
+      );
+    });
+
     it("should clean up uploaded file on error", async () => {
       req.body = {
         name: "Test Tenant",
@@ -303,6 +377,34 @@ describe("tenant Controller", () => {
       await tenantController.createTenant(req, res, next);
 
       expect(next).toHaveBeenCalledWith(mockError);
+    });
+
+    it("should handle file deletion error in catch block", async () => {
+      req.body = {
+        name: "Test Tenant",
+        code: "test",
+      };
+      req.file = { originalname: "logo.png" };
+      req.uploadFilename = "logo-uploaded.png";
+      const mockError = { status: 500, message: "Database error" };
+      tenantService.createTenant.mockRejectedValue(mockError);
+
+      // Mock deleteUpload to throw an error
+      const { deleteUpload } = require("../../utils/upload.util");
+      deleteUpload.mockRejectedValue(new Error("Delete failed"));
+
+      // Mock activityLog.logger.warn
+      const mockLogger = {
+        warn: jest.fn(),
+      };
+      jest.mock("../../middlewares/activityLog.middleware", () => ({
+        logger: mockLogger,
+      }));
+
+      await tenantController.createTenant(req, res, next);
+
+      expect(next).toHaveBeenCalledWith(mockError);
+      expect(deleteUpload).toHaveBeenCalledWith("logo-uploaded.png", "uploads/tenant");
     });
   });
 
@@ -367,6 +469,15 @@ describe("tenant Controller", () => {
         VALID_USER_ID,
       );
     });
+
+    it("should return 400 on validation error", async () => {
+      req.params = { tenantId: "not-a-uuid" };
+      req.body = { name: "Updated Tenant" };
+
+      await tenantController.updateTenant(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+    });
   });
 
   describe("deleteTenant", () => {
@@ -404,6 +515,20 @@ describe("tenant Controller", () => {
     it("should return 400 on validation error", async () => {
       req.query = { tenantId: "not-a-uuid" };
       req.body = { deletedBy: VALID_USER_ID };
+
+      await tenantController.deleteTenant(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+    });
+
+    it("should return 400 when tenant deletion fails validation", async () => {
+      req.query = { tenantId: VALID_TENANT_ID };
+      req.body = { deletedBy: VALID_USER_ID };
+      tenantService.deleteTenant.mockResolvedValue({
+        status: 400,
+        message: "Invalid deletion request",
+        data: null,
+      });
 
       await tenantController.deleteTenant(req, res, next);
 
@@ -483,6 +608,25 @@ describe("tenant Controller", () => {
 
       expect(res.status).toHaveBeenCalledWith(404);
     });
+
+    it("should use default message when result has no message", async () => {
+      req.params = { tenantId: VALID_TENANT_ID };
+      req.body = { theme: "dark" };
+      tenantService.updateTenantSettings.mockResolvedValue({
+        data: { theme: "dark" },
+        status: 200,
+      });
+
+      await tenantController.updateTenantSettings(req, res, next);
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        expect.anything(),
+        null,
+        "Tenant settings updated successfully",
+        200,
+      );
+    });
   });
 
   describe("getTenantUserCount", () => {
@@ -500,6 +644,24 @@ describe("tenant Controller", () => {
         VALID_TENANT_ID,
       );
       expect(success).toHaveBeenCalled();
+    });
+
+    it("should use default message when result has no message", async () => {
+      req.params = { tenantId: VALID_TENANT_ID };
+      tenantService.getTenantUserCount.mockResolvedValue({
+        data: { total: 5, active: 4, inactive: 1 },
+        status: 200,
+      });
+
+      await tenantController.getTenantUserCount(req, res, next);
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        expect.anything(),
+        null,
+        "Fetch tenant user count successful",
+        200,
+      );
     });
 
     it("should return 404 when tenant not found", async () => {

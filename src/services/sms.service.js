@@ -404,7 +404,12 @@ function getNotificationTemplate(type, data) {
     "verification": `Your verification code is: ${data.code || ""}. Valid for 5 minutes.`,
   };
 
-  return templates[type] || templates.alert;
+  const msg = templates[type] || templates.alert;
+  return {
+    "+1": msg,
+    "+44": msg,
+    "+62": msg,
+  };
 }
 
 // ==========================================
@@ -415,8 +420,9 @@ function getNotificationTemplate(type, data) {
  * Mask phone number for logging
  */
 function maskPhone(phone) {
-  if (!phone || phone.length < 4) return "***";
-  return phone.slice(0, -4) + "****" + phone.slice(-4);
+  const str = typeof phone === "string" ? phone : (phone?.phoneNumber || phone?.number || String(phone || ""));
+  if (!str || str.length < 4) return "***";
+  return str.slice(0, -4) + "****" + str.slice(-4);
 }
 
 /**

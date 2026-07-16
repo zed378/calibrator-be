@@ -1,17 +1,41 @@
-jest.mock("../../models", () => ({
-  AuditLog: { destroy: jest.fn() },
-  Notification: { destroy: jest.fn() },
-  Session: { destroy: jest.fn() },
-  TenantSettings: {
-    findOne: jest.fn(),
+const { Op } = require("sequelize");
+
+jest.mock("../../models", () => {
+  const mockUser = {
     findAll: jest.fn(),
-    upsert: jest.fn(),
-    destroy: jest.fn(),
-  },
-}));
+    update: jest.fn(),
+    rawAttributes: {
+      id: { fieldName: "id", type: { key: "INTEGER" } },
+      email: { fieldName: "email", type: { key: "STRING" } },
+      createdAt: { fieldName: "createdAt", type: { key: "DATE" } },
+    },
+  };
+  const mockAudit_log = {
+    findAll: jest.fn(),
+    update: jest.fn(),
+    rawAttributes: {
+      id: { fieldName: "id", type: { key: "INTEGER" } },
+      ipAddress: { fieldName: "ipAddress", type: { key: "STRING" } },
+    },
+  };
+
+  return {
+    AuditLog: { destroy: jest.fn() },
+    Notification: { destroy: jest.fn() },
+    Session: { destroy: jest.fn() },
+    TenantSettings: {
+      findOne: jest.fn(),
+      findAll: jest.fn(),
+      upsert: jest.fn(),
+      destroy: jest.fn(),
+    },
+    User: mockUser,
+    Audit_log: mockAudit_log,
+  };
+});
 
 const dataRetention = require("../../services/dataRetention.service");
-const { AuditLog, Notification, Session, TenantSettings } = require("../../models");
+const { AuditLog, Notification, Session, TenantSettings, User, Audit_log } = require("../../models");
 
 describe("dataRetention.service", () => {
   beforeEach(() => jest.clearAllMocks());
@@ -22,6 +46,14 @@ describe("dataRetention.service", () => {
       const result = await dataRetention.getRetentionPolicy("t1");
       expect(result.audit_logs).toBe(365);
       expect(result.notifications).toBe(90);
+    });
+
+    it("returns custom policies when overrides exist", async () => {
+      TenantSettings.findAll.mockResolvedValue([
+        { key: "retention_policy_audit_logs", value: "180" },
+      ]);
+      const result = await dataRetention.getRetentionPolicy("t1");
+      expect(result.audit_logs).toBe(180);
     });
   });
 
@@ -40,7 +72,11 @@ describe("dataRetention.service", () => {
     });
 
     it("rejects unknown policy keys", async () => {
-      expect(dataRetention.setRetentionPolicy("t1", "unknown", 30)).rejects.toThrow();
+      await expect(dataRetention.setRetentionPolicy("t1", "unknown", 30)).rejects.toThrow();
+    });
+
+    it("rejects negative retention days", async () => {
+      await expect(dataRetention.setRetentionPolicy("t1", "audit_logs", -5)).rejects.toThrow();
     });
   });
 
@@ -87,6 +123,98 @@ describe("dataRetention.service", () => {
       const result = await dataRetention.purgeExpiredRecords("t1");
       expect(result.skipped).toBe(true);
       expect(result.reason).toBe("legal_hold");
+    });
+
+    it("skips purge for an entity if retention days <= 0", async () => {
+      TenantSettings.findOne.mockResolvedValue(null);
+      TenantSettings.findAll.mockResolvedValue([
+        { key: "retention_policy_audit_logs", value: "0" },
+      ]);
+      AuditLog.destroy.mockResolvedValue(0);
+
+      const result = await dataRetention.purgeExpiredRecords("t1");
+      expect(result.purged.audit_logs).toBeUndefined();
+    });
+  });
+
+  describe("maskPII", () => {
+    it("throws error when legal hold is active", async () => {
+      TenantSettings.findOne.mockResolvedValue({ value: "true" });
+      await expect(dataRetention.maskPII("t1", "users", [1])).rejects.toThrow("Cannot mask PII while legal hold is active");
+    });
+
+    it("throws error for unknown entity type", async () => {
+      TenantSettings.findOne.mockResolvedValue(null);
+      await expect(dataRetention.maskPII("t1", "unknown", [1])).rejects.toThrow("Unknown entity type for PII masking");
+    });
+
+    it("masks users fields with redacted values", async () => {
+      TenantSettings.findOne.mockResolvedValue(null);
+      User.update.mockResolvedValue([1]);
+
+      const result = await dataRetention.maskPII("t1", "users", [1, 2]);
+
+      expect(User.update).toHaveBeenCalledWith(
+        {
+          email: "[REDACTED]",
+          firstName: "[REDACTED]",
+          lastName: "[REDACTED]",
+          phone: "[REDACTED]",
+        },
+        expect.any(Object)
+      );
+      expect(result.masked).toBe(2);
+    });
+
+    it("throws error when model not found", async () => {
+      TenantSettings.findOne.mockResolvedValue(null);
+      const models = require("../../models");
+      const originalUser = models.User;
+      delete models.User;
+
+      await expect(dataRetention.maskPII("t1", "users", [1])).rejects.toThrow("Model not found for entity type");
+      
+      models.User = originalUser;
+    });
+  });
+
+  describe("anonymizeDataset", () => {
+    it("throws error when legal hold is active", async () => {
+      TenantSettings.findOne.mockResolvedValue({ value: "true" });
+      await expect(dataRetention.anonymizeDataset("t1", "users")).rejects.toThrow("Cannot anonymize dataset while legal hold is active");
+    });
+
+    it("throws error when model not found", async () => {
+      TenantSettings.findOne.mockResolvedValue(null);
+      const models = require("../../models");
+      const originalUser = models.User;
+      delete models.User;
+
+      await expect(dataRetention.anonymizeDataset("t1", "users")).rejects.toThrow("Model not found for entity type");
+
+      models.User = originalUser;
+    });
+
+    it("anonymizes fields in the dataset", async () => {
+      TenantSettings.findOne.mockResolvedValue(null);
+      const mockRecord = {
+        update: jest.fn().mockResolvedValue({}),
+      };
+      User.findAll.mockResolvedValue([mockRecord]);
+
+      const result = await dataRetention.anonymizeDataset("t1", "users", {
+        keepDates: false,
+        keepNumericIds: false,
+      });
+
+      expect(mockRecord.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          email: "[ANONYMIZED]",
+          createdAt: new Date("1970-01-01"),
+          id: expect.any(String),
+        })
+      );
+      expect(result.anonymized).toBe(1);
     });
   });
 });

@@ -10,6 +10,8 @@
  */
 
 const crypto = require("crypto");
+const { promisify } = require("util");
+const generateKeyPairAsync = promisify(crypto.generateKeyPair);
 const { logger } = require("../middlewares/activityLog.middleware");
 const { AppError } = require("../utils/appError.util");
 const { db } = require("../config");
@@ -40,8 +42,8 @@ exports.generateKeyPair = async (tenantId) => {
   }
 
   try {
-    const { privateKey, publicKey } = await crypto.generateKeyPair("rsa", {
-      modulusSize: SIGNATURE_KEY_SIZE,
+    const { privateKey, publicKey } = await generateKeyPairAsync("rsa", {
+      modulusLength: SIGNATURE_KEY_SIZE,
       publicKeyEncoding: {
         type: "spki",
         format: "pem",
@@ -74,6 +76,7 @@ exports.generateKeyPair = async (tenantId) => {
 
     return { keyId, publicKey, privateKey: "[REDACTED]" };
   } catch (err) {
+    if (err.status) throw err;
     logger.error("Key pair generation failed", {
       tenantId,
       error: err.message,
@@ -87,7 +90,7 @@ exports.generateKeyPair = async (tenantId) => {
  */
 function encryptPrivateKey(privateKey) {
   const encryptKey = Buffer.from(
-    process.env.ENCRYPT_KEY || "default-encrypt-key-32-bytes!!",
+    process.env.ENCRYPT_KEY || "default-encrypt-key-32-bytes!!!!",
   ).slice(0, 32);
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv("aes-256-cbc", encryptKey, iv);
@@ -103,7 +106,7 @@ function encryptPrivateKey(privateKey) {
  */
 function decryptPrivateKey(encryptedKey) {
   const encryptKey = Buffer.from(
-    process.env.ENCRYPT_KEY || "default-encrypt-key-32-bytes!!",
+    process.env.ENCRYPT_KEY || "default-encrypt-key-32-bytes!!!!",
   ).slice(0, 32);
   const [ivHex, encrypted] = encryptedKey.split(":");
   const iv = Buffer.from(ivHex, "hex");
@@ -191,6 +194,7 @@ exports.createSignatureWorkflow = async (tenantId, data) => {
       })),
     };
   } catch (err) {
+    if (err.status) throw err;
     logger.error("Failed to create signature workflow", {
       tenantId,
       error: err.message,
@@ -361,6 +365,7 @@ exports.signDocument = async (stepId, userId, signatureData) => {
       certificate: generateSignatureCertificate(signature, workflow),
     };
   } catch (err) {
+    if (err.status) throw err;
     logger.error("Signature failed", {
       stepId,
       userId,
@@ -549,6 +554,7 @@ exports.cancelWorkflow = async (workflowId, userId, tenantId) => {
 
     return { success: true };
   } catch (err) {
+    if (err.status) throw err;
     logger.error("Failed to cancel workflow", {
       workflowId,
       error: err.message,
@@ -597,6 +603,7 @@ exports.revokeSignature = async (signatureId, userId, tenantId, reason) => {
 
     return { success: true };
   } catch (err) {
+    if (err.status) throw err;
     logger.error("Failed to revoke signature", {
       signatureId,
       error: err.message,

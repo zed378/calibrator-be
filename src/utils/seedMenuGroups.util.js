@@ -46,11 +46,10 @@ function getMenuGroupId(slug) {
     "network-security": "a0000000-0000-0000-0000-000000000217",
     "scim": "a0000000-0000-0000-0000-000000000218",
   };
-  // Fallback MUST be a valid UUID — the last segment needs 12 hex chars.
-  return (
-    ids[slug] ||
-    `a0000000-0000-0000-0000-${Date.now().toString(16).padStart(12, "0").slice(-12)}`
-  );
+  if (ids[slug]) {
+    return ids[slug];
+  }
+  return `a0000000-0000-0000-0000-${Date.now().toString(16).padStart(12, "0").slice(-12)}`;
 }
 
 /**
@@ -384,7 +383,7 @@ async function seedMenuGroups() {
    * hard-coded primary key (e.g. the id already belongs to another row),
    * retry once letting the DB generate a fresh UUID.
    */
-  const upsertGroup = async (groupData, parentId = null) => {
+  const upsertGroup = async (groupData, parentId) => {
     const group = await MenuGroup.findOne({ where: { slug: groupData.slug } });
     if (group) {
       await group.update({
@@ -621,4 +620,5 @@ module.exports = {
   seedMenuGroups,
   seedRoleMenuPermissions,
   seedAll,
+  getMenuGroupId,
 };

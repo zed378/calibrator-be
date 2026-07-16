@@ -278,7 +278,8 @@ exports.verifyOidcCallback = async (code, ssoSettings, redirectUri) => {
       email: (
         decoded.email ||
         decoded.preferred_username ||
-        decoded.upn
+        decoded.upn ||
+        ""
       ).toLowerCase(),
       firstName: decoded.given_name || decoded.name?.split(" ")[0] || "SSO",
       lastName: decoded.family_name || "User",

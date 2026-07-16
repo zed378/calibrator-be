@@ -1,77 +1,328 @@
-jest.mock("../../models", () => ({
-  Tenant: { findByPk: jest.fn() },
-  User: { count: jest.fn() },
-  Attachment: { sum: jest.fn() },
-}));
+// eslint-disable-next-line no-undef
+jest.mock("../../models", () => {
+  const mockTenant = {
+    findByPk: jest.fn(),
+  };
+  const mockUser = {
+    count: jest.fn(),
+  };
+  const mockAttachment = {
+    sum: jest.fn(),
+  };
+  return {
+    Tenant: mockTenant,
+    User: mockUser,
+    Attachment: mockAttachment,
+  };
+});
 
-const quota = require("../../services/quota.service");
-const { Tenant, User, Attachment } = require("../../models");
+const {
+  PLAN_FEATURES,
+  PLAN_ORDER,
+  getSeatUsage,
+  checkSeatQuota,
+  getStorageUsageMb,
+  checkStorageQuota,
+  planHasFeature,
+  checkFeature,
+  getUsageSummary,
+} = require("../../services/quota.service");
 
 describe("quota.service", () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  describe("PLAN_FEATURES", () => {
+    it("should have correct features for free plan", () => {
+      expect(PLAN_FEATURES.free).toEqual(["core"]);
+    });
+
+    it("should have correct features for professional plan", () => {
+      expect(PLAN_FEATURES.professional).toEqual([
+        "core",
+        "reports",
+        "webhooks",
+      ]);
+    });
+
+    it("should have correct features for business plan", () => {
+      expect(PLAN_FEATURES.business).toEqual([
+        "core",
+        "reports",
+        "webhooks",
+        "api_keys",
+        "sso",
+        "search",
+      ]);
+    });
+
+    it("should have correct features for enterprise plan", () => {
+      expect(PLAN_FEATURES.enterprise).toEqual([
+        "core",
+        "reports",
+        "webhooks",
+        "api_keys",
+        "sso",
+        "search",
+        "audit_export",
+        "custom_branding",
+      ]);
+    });
+  });
+
+  describe("PLAN_ORDER", () => {
+    it("should have correct plan order", () => {
+      expect(PLAN_ORDER).toEqual([
+        "free",
+        "professional",
+        "business",
+        "enterprise",
+      ]);
+    });
+  });
+
+  describe("getSeatUsage", () => {
+    it("should count users for tenant", async () => {
+      const { User } = require("../../models");
+      User.count.mockResolvedValue(10);
+
+      const result = await getSeatUsage("tenant-1");
+
+      expect(User.count).toHaveBeenCalledWith({
+        where: { tenantId: "tenant-1" },
+      });
+      expect(result).toBe(10);
+    });
+  });
 
   describe("checkSeatQuota", () => {
-    it("allows when under the limit", async () => {
-      Tenant.findByPk.mockResolvedValue({ limitSeats: 5 });
-      User.count.mockResolvedValue(3);
-      expect(await quota.checkSeatQuota("t1")).toMatchObject({ allowed: true, used: 3, limit: 5 });
-    });
-    it("denies at the limit", async () => {
-      Tenant.findByPk.mockResolvedValue({ limitSeats: 5 });
-      User.count.mockResolvedValue(5);
-      expect((await quota.checkSeatQuota("t1")).allowed).toBe(false);
-    });
-    it("treats a negative limit as unlimited", async () => {
-      Tenant.findByPk.mockResolvedValue({ limitSeats: -1 });
-      User.count.mockResolvedValue(100);
-      const r = await quota.checkSeatQuota("t1");
-      expect(r.unlimited).toBe(true);
-      expect(r.allowed).toBe(true);
-    });
-    it("allows when the tenant is missing", async () => {
+    it("should return unlimited when tenant not found", async () => {
+      const { Tenant } = require("../../models");
       Tenant.findByPk.mockResolvedValue(null);
-      expect((await quota.checkSeatQuota("t1")).allowed).toBe(true);
+
+      const result = await checkSeatQuota("nonexistent");
+
+      expect(result.allowed).toBe(true);
+      expect(result.used).toBe(0);
+      expect(result.unlimited).toBe(true);
+    });
+
+    it("should return unlimited when limit is null", async () => {
+      const { Tenant } = require("../../models");
+      const { User } = require("../../models");
+      Tenant.findByPk.mockResolvedValue({ limitSeats: null });
+      User.count.mockResolvedValue(5);
+
+      const result = await checkSeatQuota("tenant-1");
+
+      expect(result.unlimited).toBe(true);
+      expect(result.allowed).toBe(true);
+      expect(result.used).toBe(5);
+    });
+
+    it("should return unlimited when limit is negative", async () => {
+      const { Tenant } = require("../../models");
+      const { User } = require("../../models");
+      Tenant.findByPk.mockResolvedValue({ limitSeats: -1 });
+      User.count.mockResolvedValue(5);
+
+      const result = await checkSeatQuota("tenant-1");
+
+      expect(result.unlimited).toBe(true);
+    });
+
+    it("should return allowed true when under limit", async () => {
+      const { Tenant } = require("../../models");
+      const { User } = require("../../models");
+      Tenant.findByPk.mockResolvedValue({ limitSeats: 20 });
+      User.count.mockResolvedValue(10);
+
+      const result = await checkSeatQuota("tenant-1");
+
+      expect(result.allowed).toBe(true);
+      expect(result.limit).toBe(20);
+      expect(result.used).toBe(10);
+      expect(result.unlimited).toBe(false);
+    });
+
+    it("should return allowed false when at limit", async () => {
+      const { Tenant } = require("../../models");
+      const { User } = require("../../models");
+      Tenant.findByPk.mockResolvedValue({ limitSeats: 10 });
+      User.count.mockResolvedValue(10);
+
+      const result = await checkSeatQuota("tenant-1");
+
+      expect(result.allowed).toBe(false);
+      expect(result.limit).toBe(10);
+      expect(result.used).toBe(10);
+    });
+  });
+
+  describe("getStorageUsageMb", () => {
+    it("should return 0 when Attachment not available", async () => {
+      const { Attachment } = require("../../models");
+      Attachment.sum.mockResolvedValue(null);
+
+      const result = await getStorageUsageMb("tenant-1");
+
+      expect(result).toBe(0);
+    });
+
+    it("should return 0 when tenantId not provided", async () => {
+      const result = await getStorageUsageMb(null);
+
+      expect(result).toBe(0);
+    });
+
+    it("should convert bytes to MB", async () => {
+      const { Attachment } = require("../../models");
+      Attachment.sum.mockResolvedValue(1048576); // 1 MB in bytes
+
+      const result = await getStorageUsageMb("tenant-1");
+
+      expect(result).toBe(1);
     });
   });
 
   describe("checkStorageQuota", () => {
-    it("denies when used + incoming exceeds the limit", async () => {
-      Tenant.findByPk.mockResolvedValue({ limitStorageMb: 1 });
-      Attachment.sum.mockResolvedValue(1024 * 1024); // 1MB used
-      const r = await quota.checkStorageQuota("t1", 1024 * 1024); // +1MB incoming
-      expect(r.allowed).toBe(false);
+    it("should return unlimited when tenant not found", async () => {
+      const { Tenant } = require("../../models");
+      Tenant.findByPk.mockResolvedValue(null);
+
+      const result = await checkStorageQuota("nonexistent");
+
+      expect(result.allowed).toBe(true);
+      expect(result.unlimited).toBe(true);
     });
-    it("allows within the limit", async () => {
-      Tenant.findByPk.mockResolvedValue({ limitStorageMb: 100 });
+
+    it("should return unlimited when limit is null", async () => {
+      const { Tenant } = require("../../models");
+      const { Attachment } = require("../../models");
+      Tenant.findByPk.mockResolvedValue({ limitStorageMb: null });
       Attachment.sum.mockResolvedValue(0);
-      expect((await quota.checkStorageQuota("t1", 1024)).allowed).toBe(true);
+
+      const result = await checkStorageQuota("tenant-1");
+
+      expect(result.unlimited).toBe(true);
+      expect(result.allowed).toBe(true);
+    });
+
+    it("should return allowed true when under limit", async () => {
+      const { Tenant } = require("../../models");
+      const { Attachment } = require("../../models");
+      Tenant.findByPk.mockResolvedValue({ limitStorageMb: 100 });
+      Attachment.sum.mockResolvedValue(5242880); // 5 MB
+
+      const result = await checkStorageQuota("tenant-1");
+
+      expect(result.allowed).toBe(true);
+      expect(result.limitMb).toBe(100);
+      expect(result.usedMb).toBe(5);
+    });
+
+    it("should include incoming bytes in calculation", async () => {
+      const { Tenant } = require("../../models");
+      const { Attachment } = require("../../models");
+      Tenant.findByPk.mockResolvedValue({ limitStorageMb: 10 });
+      Attachment.sum.mockResolvedValue(8388608); // 8 MB
+      // incoming: 3 MB = 3145728 bytes
+      const result = await checkStorageQuota("tenant-1", 3145728);
+
+      expect(result.allowed).toBe(false);
+      expect(result.incomingMb).toBe(3);
+    });
+  });
+
+  describe("planHasFeature", () => {
+    it("should return true for core feature in any plan", () => {
+      expect(planHasFeature("free", "core")).toBe(true);
+      expect(planHasFeature("enterprise", "core")).toBe(true);
+    });
+
+    it("should return true for professional features in higher plans", () => {
+      expect(planHasFeature("professional", "reports")).toBe(true);
+      expect(planHasFeature("business", "reports")).toBe(true);
+      expect(planHasFeature("enterprise", "reports")).toBe(true);
+    });
+
+    it("should return false for feature not in plan", () => {
+      expect(planHasFeature("free", "reports")).toBe(false);
+      expect(planHasFeature("free", "sso")).toBe(false);
+    });
+
+    it("should default to free for unknown plan", () => {
+      expect(planHasFeature("unknown_plan", "core")).toBe(true);
+      expect(planHasFeature("unknown_plan", "reports")).toBe(false);
     });
   });
 
   describe("checkFeature", () => {
-    it("enterprise unlocks api_keys", async () => {
-      Tenant.findByPk.mockResolvedValue({ plan: "enterprise" });
-      expect((await quota.checkFeature("t1", "api_keys")).allowed).toBe(true);
+    it("should return allowed true for feature in plan", async () => {
+      const { Tenant } = require("../../models");
+      Tenant.findByPk.mockResolvedValue({ plan: "professional" });
+
+      const result = await checkFeature("tenant-1", "reports");
+
+      expect(result.allowed).toBe(true);
+      expect(result.plan).toBe("professional");
+      expect(result.feature).toBe("reports");
     });
-    it("free does not unlock api_keys", async () => {
+
+    it("should return allowed false for feature not in plan", async () => {
+      const { Tenant } = require("../../models");
       Tenant.findByPk.mockResolvedValue({ plan: "free" });
-      expect((await quota.checkFeature("t1", "api_keys")).allowed).toBe(false);
+
+      const result = await checkFeature("tenant-1", "sso");
+
+      expect(result.allowed).toBe(false);
+      expect(result.plan).toBe("free");
+    });
+
+    it("should default to free when tenant not found", async () => {
+      const { Tenant } = require("../../models");
+      Tenant.findByPk.mockResolvedValue(null);
+
+      const result = await checkFeature("nonexistent", "core");
+
+      expect(result.allowed).toBe(true);
+      expect(result.plan).toBe("free");
     });
   });
 
   describe("getUsageSummary", () => {
-    it("returns null when the tenant is missing", async () => {
+    it("should return null when tenant not found", async () => {
+      const { Tenant } = require("../../models");
       Tenant.findByPk.mockResolvedValue(null);
-      expect(await quota.getUsageSummary("t1")).toBeNull();
+
+      const result = await getUsageSummary("nonexistent");
+
+      expect(result).toBe(null);
     });
-    it("summarizes seats, storage, and features", async () => {
-      Tenant.findByPk.mockResolvedValue({ plan: "professional", status: "active", limitSeats: 10, limitStorageMb: 100 });
-      User.count.mockResolvedValue(4);
-      Attachment.sum.mockResolvedValue(2 * 1024 * 1024); // 2MB
-      const s = await quota.getUsageSummary("t1");
-      expect(s.seats).toEqual({ used: 4, limit: 10 });
-      expect(s.storage.usedMb).toBe(2);
-      expect(s.features).toContain("reports");
+
+    it("should return usage summary with all fields", async () => {
+      const { Tenant } = require("../../models");
+      const { User } = require("../../models");
+      const { Attachment } = require("../../models");
+
+      Tenant.findByPk.mockResolvedValue({
+        plan: "professional",
+        status: "active",
+        limitSeats: 20,
+        limitStorageMb: 100,
+      });
+      User.count.mockResolvedValue(5);
+      Attachment.sum.mockResolvedValue(5242880); // 5 MB
+
+      const result = await getUsageSummary("tenant-1");
+
+      expect(result.plan).toBe("professional");
+      expect(result.status).toBe("active");
+      expect(result.features).toContain("reports");
+      expect(result.seats.used).toBe(5);
+      expect(result.seats.limit).toBe(20);
+      expect(result.storage.limitMb).toBe(100);
     });
   });
 });

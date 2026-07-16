@@ -96,7 +96,11 @@ function enforceTenantWhere(options, model) {
   const context = tenantStorage.getStore();
   if (!context || context.isSuperAdmin || !context.tenantId) return;
 
-  const tenantKey = model.rawAttributes.tenantId ? 'tenantId' : (model.rawAttributes.tenant_id ? 'tenant_id' : null);
+  const tenantKey = model.rawAttributes.tenantId
+    ? "tenantId"
+    : model.rawAttributes.tenant_id
+      ? "tenant_id"
+      : null;
   if (tenantKey) {
     if (!options.where) options.where = {};
     // Prevent overriding if already explicitly queried differently?
@@ -109,36 +113,50 @@ function enforceTenantAssignment(instance, model) {
   const context = tenantStorage.getStore();
   if (!context || context.isSuperAdmin || !context.tenantId) return;
 
-  const tenantKey = model.rawAttributes.tenantId ? 'tenantId' : (model.rawAttributes.tenant_id ? 'tenant_id' : null);
+  const tenantKey = model.rawAttributes.tenantId
+    ? "tenantId"
+    : model.rawAttributes.tenant_id
+      ? "tenant_id"
+      : null;
   if (tenantKey) {
     instance[tenantKey] = context.tenantId;
   }
 }
 
-db.addHook('beforeFind', function(options) {
+db.addHook("beforeFind", function (options) {
   enforceTenantWhere(options, this);
 });
-db.addHook('beforeCount', function(options) {
+db.addHook("beforeCount", function (options) {
   enforceTenantWhere(options, this);
 });
-db.addHook('beforeUpdate', function(instance, options) {
+db.addHook("beforeUpdate", function (instance, options) {
   enforceTenantAssignment(instance, this);
 });
-db.addHook('beforeCreate', function(instance, options) {
+db.addHook("beforeCreate", function (instance, options) {
   enforceTenantAssignment(instance, this);
 });
-db.addHook('beforeDestroy', function(instance, options) {
+db.addHook("beforeDestroy", function (instance, options) {
   const context = tenantStorage.getStore();
   if (!context || context.isSuperAdmin || !context.tenantId) return;
-  const tenantKey = this.rawAttributes.tenantId ? 'tenantId' : (this.rawAttributes.tenant_id ? 'tenant_id' : null);
-  if (tenantKey && instance[tenantKey] && String(instance[tenantKey]) !== String(context.tenantId)) {
-    throw new Error('Security Violation: Attempted to destroy cross-tenant record');
+  const tenantKey = this.rawAttributes.tenantId
+    ? "tenantId"
+    : this.rawAttributes.tenant_id
+      ? "tenant_id"
+      : null;
+  if (
+    tenantKey &&
+    instance[tenantKey] &&
+    String(instance[tenantKey]) !== String(context.tenantId)
+  ) {
+    throw new Error(
+      "Security Violation: Attempted to destroy cross-tenant record",
+    );
   }
 });
-db.addHook('beforeBulkUpdate', function(options) {
+db.addHook("beforeBulkUpdate", function (options) {
   enforceTenantWhere(options, this);
 });
-db.addHook('beforeBulkDestroy', function(options) {
+db.addHook("beforeBulkDestroy", function (options) {
   enforceTenantWhere(options, this);
 });
 
@@ -146,28 +164,30 @@ db.addHook('beforeBulkDestroy', function(options) {
  * Initializes native Postgres Row-Level Security (RLS) on all models with a tenantId.
  * This should be called after db.sync() in index.js.
  */
-db.setupPostgresRLS = async function() {
+db.setupPostgresRLS = async function () {
   const dialect = db.getDialect();
-  if (dialect !== 'postgres') {
+  if (dialect !== "postgres") {
     console.warn(`RLS not supported on dialect: ${dialect}`);
     return;
   }
-  
+
   for (const modelName in models) {
     const model = models[modelName];
     let tenantKey = null;
     if (model.rawAttributes.tenantId) {
-      tenantKey = model.rawAttributes.tenantId.field || 'tenantId';
+      tenantKey = model.rawAttributes.tenantId.field || "tenantId";
     } else if (model.rawAttributes.tenant_id) {
-      tenantKey = model.rawAttributes.tenant_id.field || 'tenant_id';
+      tenantKey = model.rawAttributes.tenant_id.field || "tenant_id";
     }
-    
+
     if (tenantKey) {
       const tableName = model.tableName;
       try {
         await db.query(`ALTER TABLE "${tableName}" ENABLE ROW LEVEL SECURITY;`);
         // Drop existing policy if it exists to recreate it
-        await db.query(`DROP POLICY IF EXISTS tenant_isolation_policy ON "${tableName}";`);
+        await db.query(
+          `DROP POLICY IF EXISTS tenant_isolation_policy ON "${tableName}";`,
+        );
         // Create policy to isolate rows by tenant_id, bypassing for SUPER_ADMIN or when no tenant is set
         await db.query(`
           CREATE POLICY tenant_isolation_policy ON "${tableName}"
@@ -178,11 +198,14 @@ db.setupPostgresRLS = async function() {
           );
         `);
       } catch (err) {
-        console.error(`Failed to setup RLS for table ${tableName}:`, err.message);
+        console.error(
+          `Failed to setup RLS for table ${tableName}:`,
+          err.message,
+        );
       }
     }
   }
-  console.log('Postgres RLS policies applied to tenant-aware tables.');
+  console.log("Postgres RLS policies applied to tenant-aware tables.");
 };
 
 // Backward compatibility: export both singular and plural names
@@ -262,6 +285,7 @@ module.exports = Object.assign(db, {
   Posts: models.Post,
   Categories: models.Category,
   PostCategories: models.PostCategory,
+  SupplierScorecard: models.SupplierScorecard,
   IotReading: models.IotReading,
   IotReadings: models.IotReading,
   ESignatureRecord: models.ESignatureRecord,

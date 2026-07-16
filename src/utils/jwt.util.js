@@ -133,7 +133,8 @@ const keyRegistry = new JwtKeyRegistry();
 // ==========================================
 
 const generateAccessToken = (payload, options = {}) => {
-  const signPayload = typeof payload === "object" && payload !== null ? payload : { id: payload };
+  const signPayload =
+    typeof payload === "object" && payload !== null ? payload : { id: payload };
   const key = keyRegistry.getCurrentKey();
   const algorithm = options.algorithm || key.algorithm;
 
@@ -173,7 +174,8 @@ const generateOpaqueRefreshToken = () => {
 // ==========================================
 
 const generateRefreshToken = (payload) => {
-  const signPayload = typeof payload === "object" && payload !== null ? payload : { id: payload };
+  const signPayload =
+    typeof payload === "object" && payload !== null ? payload : { id: payload };
   const key = keyRegistry.getCurrentKey();
   const algorithm = key.algorithm;
 
@@ -297,7 +299,7 @@ const verifyRefreshToken = (token) => {
  * @param {string} algorithm - Algorithm: HS256, RS256, ES256, etc.
  * @returns {Object} { keyId, algorithm, activatedAt, expiresAt }
  */
-exports.rotateKeys = (algorithm = JWT_ALGORITHM) => {
+const rotateKeys = (algorithm = JWT_ALGORITHM) => {
   let newSecret;
 
   if (algorithm.startsWith("HS")) {
@@ -316,7 +318,7 @@ exports.rotateKeys = (algorithm = JWT_ALGORITHM) => {
   } else if (algorithm.startsWith("ES")) {
     // ECDSA key pair
     const { publicKey, privateKey } = crypto.generateKeyPairSync("ec", {
-      modulusLength: 256,
+      namedCurve: "P-256",
       publicKeyEncoding: { type: "spki", format: "pem" },
       privateKeyEncoding: { type: "pkcs8", format: "pem" },
     });
@@ -341,7 +343,7 @@ exports.rotateKeys = (algorithm = JWT_ALGORITHM) => {
 /**
  * Get current key info (for monitoring/debugging)
  */
-exports.getKeyInfo = () => {
+const getKeyInfo = () => {
   const currentKey = keyRegistry.getCurrentKey();
   return {
     keyId: keyRegistry._currentKeyId,
@@ -355,7 +357,7 @@ exports.getKeyInfo = () => {
 /**
  * Get all active key IDs (for monitoring)
  */
-exports.getActiveKeyIds = () => {
+const getActiveKeyIds = () => {
   return keyRegistry.getActiveKeys().map((k) => k.keyId);
 };
 
@@ -384,5 +386,8 @@ module.exports = {
   verifyAccessToken,
   verifyRefreshToken,
   decodeToken,
+  rotateKeys,
+  getKeyInfo,
+  getActiveKeyIds,
   keyRegistry,
 };
