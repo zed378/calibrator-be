@@ -376,4 +376,519 @@ describe("menuGroup.service", () => {
       expect(result.notFound).toEqual(["mg-2"]);
     });
   });
+
+  // ================================================================
+  // Coverage: child sort comparator, bulkAssign catch, slug defaults
+  // ================================================================
+  describe("formatMenuGroup child ordering", () => {
+    it("sorts children by sortOrder ascending", () => {
+      const group = {
+        id: "g1",
+        name: "Group",
+        icon: "i",
+        slug: "group",
+        sortOrder: 1,
+        children: [
+          { id: "c3", name: "Third", icon: "i3", slug: "third", sortOrder: 3 },
+          { id: "c1", name: "First", icon: "i1", slug: "first", sortOrder: 1 },
+          { id: "c2", name: "Second", icon: "i2", slug: "second", sortOrder: 2 },
+        ],
+      };
+
+      const formatted = formatMenuGroup(group);
+
+      expect(formatted.items.map((i) => i.id)).toEqual(["c1", "c2", "c3"]);
+    });
+
+    it("treats a missing child sortOrder as 0 in the comparator", () => {
+      const group = {
+        id: "g1",
+        name: "Group",
+        icon: "i",
+        slug: "group",
+        sortOrder: 1,
+        children: [
+          { id: "c2", name: "Second", icon: "i2", slug: "second", sortOrder: 5 },
+          { id: "c1", name: "NoOrder", icon: "i1", slug: "first" },
+        ],
+      };
+
+      const formatted = formatMenuGroup(group);
+
+      expect(formatted.items.map((i) => i.id)).toEqual(["c1", "c2"]);
+    });
+
+    it("returns an empty items array when children is an empty array", () => {
+      const formatted = formatMenuGroup({
+        id: "g1",
+        name: "Group",
+        icon: "i",
+        slug: "group",
+        sortOrder: 1,
+        children: [],
+      });
+
+      expect(formatted.items).toEqual([]);
+    });
+
+    it("returns an empty items array when children is undefined", () => {
+      const formatted = formatMenuGroup({
+        id: "g1",
+        name: "Group",
+        icon: "i",
+        slug: "group",
+        sortOrder: 1,
+      });
+
+      expect(formatted.items).toEqual([]);
+    });
+
+    it("leaves isAssigned undefined when no assignment map is supplied", () => {
+      const formatted = formatMenuGroup({
+        id: "g1",
+        name: "Group",
+        icon: "i",
+        slug: "group",
+        sortOrder: 1,
+        children: [{ id: "c1", name: "Child", icon: "i1", slug: "child", sortOrder: 1 }],
+      });
+
+      expect(formatted.isAssigned).toBeUndefined();
+      expect(formatted.items[0].isAssigned).toBeUndefined();
+    });
+
+    it("marks assigned parents and children from the assignment map", () => {
+      const formatted = formatMenuGroup(
+        {
+          id: "g1",
+          name: "Group",
+          icon: "i",
+          slug: "group",
+          sortOrder: 1,
+          children: [
+            { id: "c1", name: "Child", icon: "i1", slug: "child", sortOrder: 1 },
+            { id: "c2", name: "Other", icon: "i2", slug: "other", sortOrder: 2 },
+          ],
+        },
+        { g1: true, c1: true },
+      );
+
+      expect(formatted.isAssigned).toBe(true);
+      expect(formatted.items[0].isAssigned).toBe(true);
+      expect(formatted.items[1].isAssigned).toBe(false);
+    });
+  });
+
+  describe("mapSlugToPath", () => {
+    it("maps a known slug to its custom dashboard path", () => {
+      expect(mapSlugToPath("home")).toBe("/");
+      expect(mapSlugToPath("calibration")).toBe("/dashboard/devices");
+    });
+
+    it("falls back to /dashboard/<slug> for an unknown slug", () => {
+      expect(mapSlugToPath("something-new")).toBe("/dashboard/something-new");
+    });
+  });
+
+  describe("createMenuGroup slug default", () => {
+    it("derives a slug from the name when none is supplied", async () => {
+      MenuGroup.create.mockResolvedValueOnce({
+        id: "g1",
+        name: "My New Group",
+        slug: "my-new-group",
+        sortOrder: 1,
+      });
+
+      await createMenuGroup({ name: "My New Group", icon: "i", sortOrder: 1 });
+
+      expect(MenuGroup.create).toHaveBeenCalledWith(
+        expect.objectContaining({ slug: "my-new-group" }),
+      );
+    });
+
+    it("uses an explicit slug when supplied", async () => {
+      MenuGroup.create.mockResolvedValueOnce({ id: "g1", name: "N", slug: "custom" });
+
+      await createMenuGroup({ name: "My New Group", slug: "custom" });
+
+      expect(MenuGroup.create).toHaveBeenCalledWith(
+        expect.objectContaining({ slug: "custom" }),
+      );
+    });
+  });
+
+  describe("updateMenuGroup field fallbacks", () => {
+    it("keeps existing values for every field left undefined", async () => {
+      const update = jest.fn().mockResolvedValue(undefined);
+      MenuGroup.findByPk.mockResolvedValueOnce({
+        id: "g1",
+        name: "Old",
+        slug: "old",
+        icon: "old-icon",
+        parentId: "p1",
+        sortOrder: 7,
+        isActive: true,
+        update,
+      });
+
+      await updateMenuGroup({ id: "g1" });
+
+      expect(update).toHaveBeenCalledWith({
+        name: "Old",
+        slug: "old",
+        icon: "old-icon",
+        parentId: "p1",
+        sortOrder: 7,
+        isActive: true,
+      });
+    });
+
+    it("applies falsy-but-defined values rather than falling back", async () => {
+      const update = jest.fn().mockResolvedValue(undefined);
+      MenuGroup.findByPk.mockResolvedValueOnce({
+        id: "g1",
+        name: "Old",
+        slug: "old",
+        icon: "old-icon",
+        parentId: "p1",
+        sortOrder: 7,
+        isActive: true,
+        update,
+      });
+
+      await updateMenuGroup({ id: "g1", parentId: null, sortOrder: 0, isActive: false });
+
+      expect(update).toHaveBeenCalledWith(
+        expect.objectContaining({ parentId: null, sortOrder: 0, isActive: false }),
+      );
+    });
+  });
+
+  describe("bulkAssign error handling", () => {
+    it("records a findOrCreate rejection in the failed list and keeps going", async () => {
+      Role.findByPk.mockResolvedValueOnce({ id: "role-1" });
+      MenuGroup.findByPk
+        .mockResolvedValueOnce({ id: "mg-1" })
+        .mockResolvedValueOnce({ id: "mg-2" });
+      RoleMenuPermission.findOrCreate
+        .mockRejectedValueOnce(new Error("unique constraint violated"))
+        .mockResolvedValueOnce([{ id: "p2" }, true]);
+
+      const result = await bulkAssign("role-1", ["mg-1", "mg-2"]);
+
+      expect(result.failed).toEqual([
+        { menuGroupId: "mg-1", error: "unique constraint violated" },
+      ]);
+      expect(result.assigned).toEqual(["mg-2"]);
+      expect(result.alreadyAssigned).toEqual([]);
+    });
+
+    it("records a findByPk rejection in the failed list", async () => {
+      Role.findByPk.mockResolvedValueOnce({ id: "role-1" });
+      MenuGroup.findByPk.mockRejectedValueOnce(new Error("DB down"));
+
+      const result = await bulkAssign("role-1", ["mg-1"]);
+
+      expect(result.failed).toEqual([{ menuGroupId: "mg-1", error: "DB down" }]);
+      expect(RoleMenuPermission.findOrCreate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("formatMenuGroup comparator with both sortOrders missing", () => {
+    it("keeps children stable when neither child has a sortOrder", () => {
+      const formatted = formatMenuGroup({
+        id: "g1",
+        name: "Group",
+        icon: "i",
+        slug: "group",
+        sortOrder: 1,
+        children: [
+          { id: "c1", name: "A", icon: "i1", slug: "a" },
+          { id: "c2", name: "B", icon: "i2", slug: "b" },
+        ],
+      });
+
+      expect(formatted.items.map((i) => i.id)).toEqual(["c1", "c2"]);
+    });
+
+    it("sorts an ordered child ahead of an unordered one", () => {
+      const formatted = formatMenuGroup({
+        id: "g1",
+        name: "Group",
+        icon: "i",
+        slug: "group",
+        sortOrder: 1,
+        children: [
+          { id: "c1", name: "NoOrder", icon: "i1", slug: "a" },
+          { id: "c2", name: "Ordered", icon: "i2", slug: "b", sortOrder: 4 },
+        ],
+      });
+
+      expect(formatted.items.map((i) => i.id)).toEqual(["c1", "c2"]);
+    });
+  });
+
+  describe("getRoleMenuAssignments coverage gaps", () => {
+    it("includes all children when the parent itself is assigned", async () => {
+      RoleMenuPermission.findAll.mockResolvedValueOnce([{ menuGroupId: "g1" }]);
+      MenuGroup.findAll.mockResolvedValueOnce([
+        {
+          id: "g1",
+          name: "Group",
+          icon: "i",
+          slug: "group",
+          sortOrder: 1,
+          children: [
+            { id: "c1", name: "A", icon: "i1", slug: "a" },
+            { id: "c2", name: "B", icon: "i2", slug: "b" },
+          ],
+        },
+      ]);
+
+      const result = await getRoleMenuAssignments("role-1");
+
+      expect(result).toHaveLength(1);
+      expect(result[0].items.map((i) => i.id)).toEqual(["c1", "c2"]);
+    });
+
+    it("includes an unassigned parent when only a child is assigned", async () => {
+      RoleMenuPermission.findAll.mockResolvedValueOnce([{ menuGroupId: "c2" }]);
+      MenuGroup.findAll.mockResolvedValueOnce([
+        {
+          id: "g1",
+          name: "Group",
+          icon: "i",
+          slug: "group",
+          sortOrder: 1,
+          children: [
+            { id: "c1", name: "A", icon: "i1", slug: "a" },
+            { id: "c2", name: "B", icon: "i2", slug: "b" },
+          ],
+        },
+      ]);
+
+      const result = await getRoleMenuAssignments("role-1");
+
+      expect(result).toHaveLength(1);
+      expect(result[0].items.map((i) => i.id)).toEqual(["c2"]);
+    });
+
+    it("omits a group when neither it nor any child is assigned", async () => {
+      RoleMenuPermission.findAll.mockResolvedValueOnce([]);
+      MenuGroup.findAll.mockResolvedValueOnce([
+        {
+          id: "g1",
+          name: "Group",
+          icon: "i",
+          slug: "group",
+          sortOrder: 1,
+          children: [{ id: "c1", name: "A", icon: "i1", slug: "a" }],
+        },
+      ]);
+
+      const result = await getRoleMenuAssignments("role-1");
+
+      expect(result).toEqual([]);
+    });
+
+    it("includes an assigned parent that has no children array at all", async () => {
+      RoleMenuPermission.findAll.mockResolvedValueOnce([{ menuGroupId: "g1" }]);
+      MenuGroup.findAll.mockResolvedValueOnce([
+        { id: "g1", name: "Leaf", icon: "i", slug: "leaf", sortOrder: 1 },
+      ]);
+
+      const result = await getRoleMenuAssignments("role-1");
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("g1");
+      expect(result[0].items).toEqual([]);
+    });
+  });
+
+  // ================================================================
+  // 3-LEVEL NESTING (group → sub-group category → item)
+  // ================================================================
+  describe("three-level menus", () => {
+    // Management → Organization → Tenants, mirroring the seeded shape.
+    const threeLevelTree = () => [
+      {
+        id: "management",
+        name: "Management",
+        icon: "Settings",
+        slug: "management",
+        sortOrder: 3,
+        children: [
+          {
+            id: "sub-org",
+            name: "Organization",
+            icon: "Building2",
+            slug: "mgmt-organization",
+            sortOrder: 0,
+            children: [
+              { id: "tenants", name: "Tenants", icon: "Building2", slug: "tenants", sortOrder: 0 },
+              { id: "users", name: "Users", icon: "Users", slug: "users", sortOrder: 1 },
+            ],
+          },
+          {
+            id: "sub-work",
+            name: "Work & Projects",
+            icon: "KanbanSquare",
+            slug: "mgmt-work",
+            sortOrder: 1,
+            children: [
+              { id: "kanban", name: "Kanban Boards", icon: "KanbanSquare", slug: "kanban", sortOrder: 0 },
+            ],
+          },
+        ],
+      },
+    ];
+
+    it("requests grandchildren from the database", async () => {
+      MenuGroup.findAll.mockResolvedValueOnce([]);
+
+      await listMenuGroups(null);
+
+      const query = MenuGroup.findAll.mock.calls[0][0];
+      expect(query.include[0].as).toBe("children");
+      expect(query.include[0].include[0].as).toBe("children");
+      expect(query.include[0].include[0].where).toEqual({ isActive: true });
+      expect(query.order).toHaveLength(3);
+    });
+
+    it("formats nested items recursively so a sub-group carries its own items", async () => {
+      MenuGroup.findAll.mockResolvedValueOnce(threeLevelTree());
+
+      const [management] = await listMenuGroups(null);
+
+      expect(management.items.map((i) => i.id)).toEqual(["sub-org", "sub-work"]);
+      expect(management.items[0].items.map((i) => i.id)).toEqual(["tenants", "users"]);
+      expect(management.items[0].items[0].path).toBe("/dashboard/tenants");
+      // Leaves carry no nested items key
+      expect(management.items[0].items[0].items).toBeUndefined();
+    });
+
+    it("sorts sub-group items by sortOrder", async () => {
+      const tree = threeLevelTree();
+      tree[0].children[0].children.reverse();
+      MenuGroup.findAll.mockResolvedValueOnce(tree);
+
+      const [management] = await listMenuGroups(null);
+
+      expect(management.items[0].items.map((i) => i.id)).toEqual(["tenants", "users"]);
+    });
+
+    it("annotates isAssigned at every depth", async () => {
+      MenuGroup.findAll.mockResolvedValueOnce(threeLevelTree());
+      RoleMenuPermission.findAll.mockResolvedValueOnce([
+        { menuGroupId: "sub-org" },
+        { menuGroupId: "tenants" },
+      ]);
+
+      const [management] = await listMenuGroups("role-1");
+
+      expect(management.isAssigned).toBe(false);
+      expect(management.items[0].isAssigned).toBe(true);
+      expect(management.items[0].items[0].isAssigned).toBe(true);
+      expect(management.items[0].items[1].isAssigned).toBe(false);
+    });
+
+    describe("getRoleMenuAssignments at depth 3", () => {
+      it("includes sub-groups and their items when the top group is assigned", async () => {
+        RoleMenuPermission.findAll.mockResolvedValueOnce([{ menuGroupId: "management" }]);
+        MenuGroup.findAll.mockResolvedValueOnce(threeLevelTree());
+
+        const result = await getRoleMenuAssignments("role-1");
+
+        expect(result).toHaveLength(1);
+        expect(result[0].items.map((i) => i.id)).toEqual(["sub-org", "sub-work"]);
+        expect(result[0].items[0].items.map((i) => i.id)).toEqual(["tenants", "users"]);
+        expect(result[0].items[1].items.map((i) => i.id)).toEqual(["kanban"]);
+      });
+
+      it("includes all items of an assigned sub-group when the top group is not assigned", async () => {
+        RoleMenuPermission.findAll.mockResolvedValueOnce([{ menuGroupId: "sub-work" }]);
+        MenuGroup.findAll.mockResolvedValueOnce(threeLevelTree());
+
+        const result = await getRoleMenuAssignments("role-1");
+
+        expect(result).toHaveLength(1);
+        // The unassigned, empty "Organization" category is pruned away
+        expect(result[0].items.map((i) => i.id)).toEqual(["sub-work"]);
+        expect(result[0].items[0].items.map((i) => i.id)).toEqual(["kanban"]);
+      });
+
+      it("surfaces an explicitly assigned leaf through an unassigned sub-group", async () => {
+        RoleMenuPermission.findAll.mockResolvedValueOnce([{ menuGroupId: "users" }]);
+        MenuGroup.findAll.mockResolvedValueOnce(threeLevelTree());
+
+        const result = await getRoleMenuAssignments("role-1");
+
+        expect(result).toHaveLength(1);
+        expect(result[0].items.map((i) => i.id)).toEqual(["sub-org"]);
+        expect(result[0].items[0].items.map((i) => i.id)).toEqual(["users"]);
+      });
+
+      it("keeps an assigned sub-group that has no visible children", async () => {
+        RoleMenuPermission.findAll.mockResolvedValueOnce([{ menuGroupId: "sub-empty" }]);
+        MenuGroup.findAll.mockResolvedValueOnce([
+          {
+            id: "management",
+            name: "Management",
+            icon: "Settings",
+            slug: "management",
+            sortOrder: 3,
+            children: [
+              { id: "sub-empty", name: "Empty", icon: "i", slug: "mgmt-empty", children: [] },
+            ],
+          },
+        ]);
+
+        const result = await getRoleMenuAssignments("role-1");
+
+        expect(result[0].items.map((i) => i.id)).toEqual(["sub-empty"]);
+        expect(result[0].items[0].items).toBeUndefined();
+      });
+
+      it("drops the whole group when nothing in the tree is assigned", async () => {
+        RoleMenuPermission.findAll.mockResolvedValueOnce([]);
+        MenuGroup.findAll.mockResolvedValueOnce(threeLevelTree());
+
+        const result = await getRoleMenuAssignments("role-1");
+
+        expect(result).toEqual([]);
+      });
+    });
+  });
+
+  describe("updateMenuGroup explicit name/slug/icon", () => {
+    it("applies name, slug and icon when they are supplied", async () => {
+      const update = jest.fn().mockResolvedValue(undefined);
+      MenuGroup.findByPk.mockResolvedValueOnce({
+        id: "g1",
+        name: "Old",
+        slug: "old",
+        icon: "old-icon",
+        parentId: null,
+        sortOrder: 1,
+        isActive: true,
+        update,
+      });
+
+      await updateMenuGroup({
+        id: "g1",
+        name: "New",
+        slug: "new",
+        icon: "new-icon",
+      });
+
+      expect(update).toHaveBeenCalledWith({
+        name: "New",
+        slug: "new",
+        icon: "new-icon",
+        parentId: null,
+        sortOrder: 1,
+        isActive: true,
+      });
+    });
+  });
 });

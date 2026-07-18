@@ -2,6 +2,8 @@ const express = require("express");
 const router = express.Router();
 const { auth } = require("../../middlewares/auth.middleware");
 const { validateUuid } = require("../../middlewares/validateUuid.middleware");
+const { validate } = require("../../middlewares/validation.middleware");
+const { deleteManySchema } = require("../../validators/notification.validator");
 const notificationController = require("../../controllers/notification.controller");
 
 /**
@@ -135,6 +137,60 @@ router.patch(
  *       404:
  *         description: Notification not found
  */
+/**
+ * @swagger
+ * /api/v1/notifications/all:
+ *   delete:
+ *     summary: Delete all of the caller's notifications
+ *     description: Removes every notification visible to the authenticated user (their own plus tenant-wide broadcasts).
+ *     tags: [Notifications]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200:
+ *         description: Notifications deleted
+ */
+// Registered BEFORE /:notificationId so "all" is not parsed as a uuid param.
+router.delete(
+  "/all",
+  auth,
+  notificationController.deleteAllNotifications,
+);
+
+/**
+ * @swagger
+ * /api/v1/notifications/bulk:
+ *   delete:
+ *     summary: Delete selected notifications
+ *     description: Deletes the given notification ids that belong to the caller. Ids outside their scope are ignored.
+ *     tags: [Notifications]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [ids]
+ *             properties:
+ *               ids:
+ *                 type: array
+ *                 items: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Notifications deleted
+ *       400:
+ *         description: Invalid or empty id list
+ *       404:
+ *         description: No matching notifications found
+ */
+// Also registered BEFORE /:notificationId for the same reason.
+router.delete(
+  "/bulk",
+  auth,
+  validate(deleteManySchema),
+  notificationController.deleteManyNotifications,
+);
+
 router.delete(
   "/:notificationId",
   auth,

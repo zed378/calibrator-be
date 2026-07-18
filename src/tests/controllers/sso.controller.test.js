@@ -382,4 +382,234 @@ describe("sso.controller", () => {
       expect(res.redirect).toHaveBeenCalledWith(expect.stringContaining("sso-callback"));
     });
   });
+
+  // Every handler reads settings as `settingsResult.data?.settings || {}`, so a
+  // tenant with no settings row must be treated as "SSO not enabled" rather
+  // than throwing a TypeError.
+  describe("missing tenant settings", () => {
+    it.each([
+      ["ssoLogin", () => ssoController.ssoLogin, { tenantCode: "acme" }, {}],
+      ["ssoCallback", () => ssoController.ssoCallback, { SAMLResponse: "b64", RelayState: "acme" }, {}],
+      ["oidcLogin", () => ssoController.oidcLogin, { tenantCode: "acme" }, {}],
+      ["oidcCallback", () => ssoController.oidcCallback, { code: "auth-code", state: "tenant_acme" }, {}],
+    ])("%s returns 400 when getTenantSettings resolves with no data", async (_name, getHandler, body) => {
+      req.body = body;
+      tenantService.getTenantSettings.mockResolvedValue({});
+
+      await getHandler()(req, res, next);
+
+      expect(error).toHaveBeenCalledWith(
+        res,
+        "SSO is not enabled for this tenant",
+        400,
+        expect.any(String),
+      );
+    });
+
+    it("ssoMetadata still emits metadata when the tenant has no settings", async () => {
+      req.params = { tenantCode: "acme" };
+      tenantService.getTenantSettings.mockResolvedValue({ data: {} });
+
+      await ssoController.ssoMetadata(req, res, next);
+
+      // With no sso_sp_entity_id/sso_sp_callback_url configured, both fall back
+      // to HOST_URL-derived defaults.
+      expect(res.status).toHaveBeenCalledWith(200);
+      const xml = res.send.mock.calls[0][0];
+      expect(xml).toContain('entityID="http://localhost:5000/api/v1/auth/sso/metadata/acme"');
+      expect(xml).toContain('Location="http://localhost:5000/api/v1/auth/sso/callback/acme"');
+    });
+  });
+
+  describe("configured SP URL overrides", () => {
+    it("uses sso_sp_entity_id and sso_sp_callback_url when configured", async () => {
+      req.params = { tenantCode: "acme" };
+      tenantService.getTenantSettings.mockResolvedValue({
+        data: {
+          settings: {
+            sso_enabled: "true",
+            sso_sp_entity_id: "https://sp.acme.com/entity",
+            sso_sp_callback_url: "https://sp.acme.com/acs",
+          },
+        },
+      });
+
+      await ssoController.ssoMetadata(req, res, next);
+
+      const xml = res.send.mock.calls[0][0];
+      expect(xml).toContain('entityID="https://sp.acme.com/entity"');
+      expect(xml).toContain('Location="https://sp.acme.com/acs"');
+    });
+
+    it("falls back to the built-in host URL when HOST_URL is unset", async () => {
+      const prev = process.env.HOST_URL;
+      delete process.env.HOST_URL;
+      try {
+        req.params = { tenantCode: "acme" };
+        tenantService.getTenantSettings.mockResolvedValue({
+          data: { settings: { sso_enabled: "true" } },
+        });
+
+        await ssoController.ssoMetadata(req, res, next);
+
+        const xml = res.send.mock.calls[0][0];
+        expect(xml).toContain('entityID="http://localhost:5000/api/v1/auth/sso/metadata/acme"');
+      } finally {
+        process.env.HOST_URL = prev;
+      }
+    });
+
+    it("derives the OIDC redirect_uri from HOST_URL when oidc_redirect_uri is unset", async () => {
+      req.body = { code: "auth-code", state: "tenant_acme" };
+      req.params = { tenantCode: "acme" };
+      tenantService.getTenantSettings.mockResolvedValue({
+        data: { settings: { sso_enabled: "true" } },
+      });
+
+      await ssoController.oidcCallback(req, res, next);
+
+      expect(ssoService.verifyOidcCallback).toHaveBeenCalledWith(
+        "auth-code",
+        expect.any(Object),
+        "http://localhost:5000/api/v1/auth/sso/oidc/callback/acme",
+      );
+    });
+
+    it("falls back to the built-in host URL for the OIDC redirect_uri when HOST_URL is unset", async () => {
+      const prev = process.env.HOST_URL;
+      delete process.env.HOST_URL;
+      try {
+        req.body = { code: "auth-code", state: "tenant_acme" };
+        req.params = { tenantCode: "acme" };
+        tenantService.getTenantSettings.mockResolvedValue({
+          data: { settings: { sso_enabled: "true" } },
+        });
+
+        await ssoController.oidcCallback(req, res, next);
+
+        expect(ssoService.verifyOidcCallback).toHaveBeenCalledWith(
+          "auth-code",
+          expect.any(Object),
+          "http://localhost:5000/api/v1/auth/sso/oidc/callback/acme",
+        );
+      } finally {
+        process.env.HOST_URL = prev;
+      }
+    });
+  });
+
+  // Sessions record the caller's IP/user-agent, defaulting to "" when Express
+  // did not populate them; the post-login redirect honours FRONTEND_URL.
+  describe("session recording and frontend redirect", () => {
+    const { createSession } = require("../../services/session.service");
+
+    it("defaults ipAddress and userAgent to empty strings on ssoCallback", async () => {
+      req.body = { SAMLResponse: "b64", RelayState: "acme" };
+      req.ip = undefined;
+      req.headers = {};
+      tenantService.getTenantSettings.mockResolvedValue({
+        data: { settings: { sso_enabled: "true" } },
+      });
+
+      await ssoController.ssoCallback(req, res, next);
+
+      expect(createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: "tenant-1",
+          userId: "user-1",
+          refreshToken: "mock-refresh-token",
+          ipAddress: "",
+          userAgent: "",
+        }),
+      );
+    });
+
+    it("defaults ipAddress and userAgent to empty strings on oidcCallback", async () => {
+      req.body = { code: "auth-code", state: "tenant_acme" };
+      req.ip = undefined;
+      req.headers = {};
+      tenantService.getTenantSettings.mockResolvedValue({
+        data: { settings: { sso_enabled: "true" } },
+      });
+
+      await ssoController.oidcCallback(req, res, next);
+
+      expect(createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ ipAddress: "", userAgent: "" }),
+      );
+    });
+
+    it("records the real ip/user-agent and redirects to FRONTEND_URL when set", async () => {
+      const prev = process.env.FRONTEND_URL;
+      process.env.FRONTEND_URL = "https://app.acme.com";
+      try {
+        req.body = { SAMLResponse: "b64", RelayState: "acme" };
+        tenantService.getTenantSettings.mockResolvedValue({
+          data: { settings: { sso_enabled: "true" } },
+        });
+
+        await ssoController.ssoCallback(req, res, next);
+
+        expect(createSession).toHaveBeenCalledWith(
+          expect.objectContaining({ ipAddress: "127.0.0.1", userAgent: "mock-agent" }),
+        );
+        expect(res.redirect).toHaveBeenCalledWith(
+          "https://app.acme.com/sso-callback?token=mock-access-token&refreshToken=mock-refresh-token",
+        );
+      } finally {
+        if (prev === undefined) delete process.env.FRONTEND_URL;
+        else process.env.FRONTEND_URL = prev;
+      }
+    });
+
+    it("redirects to FRONTEND_URL from oidcCallback when set", async () => {
+      const prev = process.env.FRONTEND_URL;
+      process.env.FRONTEND_URL = "https://app.acme.com";
+      try {
+        req.body = { code: "auth-code", state: "tenant_acme" };
+        tenantService.getTenantSettings.mockResolvedValue({
+          data: { settings: { sso_enabled: "true" } },
+        });
+
+        await ssoController.oidcCallback(req, res, next);
+
+        expect(res.redirect).toHaveBeenCalledWith(
+          "https://app.acme.com/sso-callback?token=mock-access-token&refreshToken=mock-refresh-token",
+        );
+      } finally {
+        if (prev === undefined) delete process.env.FRONTEND_URL;
+        else process.env.FRONTEND_URL = prev;
+      }
+    });
+  });
+
+  describe("oidcCallback tenant identifier", () => {
+    it("returns 400 when state has no tenant segment and no params.tenantCode", async () => {
+      req.body = { code: "auth-code", state: "nostatesegment" };
+
+      await ssoController.oidcCallback(req, res, next);
+
+      // "nostatesegment".split("_")[1] is undefined -> no tenant identifier
+      expect(error).toHaveBeenCalledWith(
+        res,
+        "Tenant identifier and authorization code are required",
+        400,
+        expect.any(String),
+      );
+    });
+
+    it("returns 400 when the tenant is known but the authorization code is missing", async () => {
+      req.body = { state: "tenant_acme" };
+      req.params = { tenantCode: "acme" };
+
+      await ssoController.oidcCallback(req, res, next);
+
+      expect(error).toHaveBeenCalledWith(
+        res,
+        "Tenant identifier and authorization code are required",
+        400,
+        expect.any(String),
+      );
+    });
+  });
 });

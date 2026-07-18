@@ -660,4 +660,77 @@ describe("user.service", () => {
       );
     });
   });
+
+  // --------------------------------------------------------------
+  // Avatar (regression: writes must use MODEL attributes, not columns)
+  // --------------------------------------------------------------
+  describe("updateUserAvatar", () => {
+    it("persists the filename to the avatarUrl attribute", async () => {
+      const mockUser = {
+        picture: "default.svg",
+        update: jest.fn().mockResolvedValue({}),
+      };
+      Users.findByPk.mockResolvedValueOnce(mockUser);
+
+      const result = await updateUserAvatar("u1", "new-avatar.png", "actor-1");
+
+      // `avatar_url` (the column) is NOT a model attribute — Sequelize would
+      // silently drop it and the upload would report success without saving.
+      expect(mockUser.update).toHaveBeenCalledWith(
+        { avatarUrl: "new-avatar.png" },
+        expect.objectContaining({ silent: true }),
+      );
+      expect(result.data.avatar).toBe("new-avatar.png");
+      expect(result.status).toBe(200);
+    });
+
+    it("removes the previous avatar file but keeps default.svg", async () => {
+      const mockUser = {
+        picture: "/uploads/profile/old.png",
+        update: jest.fn().mockResolvedValue({}),
+      };
+      Users.findByPk.mockResolvedValueOnce(mockUser);
+
+      await updateUserAvatar("u1", "new.png", "actor-1");
+      expect(deleteUpload).toHaveBeenCalledWith("old.png", "uploads/profile");
+    });
+
+    it("throws 404 when the user does not exist", async () => {
+      Users.findByPk.mockResolvedValueOnce(null);
+      await expectRejectsWithMessage(
+        updateUserAvatar("nope", "a.png", "actor-1"),
+        "User not found",
+      );
+    });
+  });
+
+  describe("removeUserAvatar", () => {
+    it("resets avatarUrl to default.svg (not the read-only `picture` getter)", async () => {
+      const mockUser = {
+        picture: "/uploads/profile/current.png",
+        update: jest.fn().mockResolvedValue({}),
+      };
+      Users.findByPk.mockResolvedValueOnce(mockUser);
+
+      const result = await removeUserAvatar("u1", "actor-1");
+
+      expect(deleteUpload).toHaveBeenCalledWith(
+        "current.png",
+        "uploads/profile",
+      );
+      expect(mockUser.update).toHaveBeenCalledWith(
+        { avatarUrl: "default.svg" },
+        expect.objectContaining({ silent: true }),
+      );
+      expect(result.data.avatar).toBe("default.svg");
+    });
+
+    it("throws 404 when the user does not exist", async () => {
+      Users.findByPk.mockResolvedValueOnce(null);
+      await expectRejectsWithMessage(
+        removeUserAvatar("nope", "actor-1"),
+        "User not found",
+      );
+    });
+  });
 });

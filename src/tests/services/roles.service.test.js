@@ -57,6 +57,17 @@ describe("RolesService", () => {
       });
       expect(result.id).toBe("role1");
     });
+
+    it("should default is_system to false and tolerate a missing description", async () => {
+      mockRole.create.mockResolvedValue({ id: "role2" });
+      await RolesService.createRole({ name: " Viewer " });
+      expect(mockRole.create).toHaveBeenCalledWith({
+        name: "Viewer",
+        description: undefined,
+        is_system: false,
+        status: "active",
+      });
+    });
   });
 
   describe("getRoleById", () => {
@@ -135,6 +146,20 @@ describe("RolesService", () => {
         description: "NewDesc",
         status: "inactive",
       });
+    });
+
+    it("should update nothing when no fields are supplied", async () => {
+      const mockUpdate = jest.fn();
+      mockRole.findByPk.mockResolvedValue({ is_system: false, update: mockUpdate });
+      await RolesService.updateRole("role1", {});
+      expect(mockUpdate).toHaveBeenCalledWith({});
+    });
+
+    it("should allow a system role to be updated to a non-deleted status", async () => {
+      const mockUpdate = jest.fn();
+      mockRole.findByPk.mockResolvedValue({ is_system: true, update: mockUpdate });
+      await RolesService.updateRole("sys1", { status: "inactive" });
+      expect(mockUpdate).toHaveBeenCalledWith({ status: "inactive" });
     });
   });
 
@@ -291,6 +316,68 @@ describe("RolesService", () => {
       expect(mockMenuGroup.findOne).toHaveBeenCalledWith({ where: { slug: "child-slug" } });
       expect(mockMenuGroup.findByPk).toHaveBeenCalledWith("parent-uuid");
     });
+
+    it("should check only the menu's own slug when the parent row is missing or has no slug", async () => {
+      mockMenuGroup.findOne.mockResolvedValue({ parentId: "parent-uuid" });
+      mockMenuGroup.findByPk.mockResolvedValue(null);
+      mockUser.findByPk.mockResolvedValue({
+        role: { status: "active", permissions: [{ permission_type: "read" }] },
+      });
+
+      expect(await RolesService.hasPermission("u1", "child-slug", "read")).toBe(true);
+      // Only the requested slug is used when no parent slug can be resolved.
+      expect(mockUser.findByPk.mock.calls[0][1].include[0].include[0].include[0].where).toEqual({
+        slug: { [Op.in]: ["child-slug"] },
+      });
+
+      mockUser.findByPk.mockClear();
+      mockMenuGroup.findByPk.mockResolvedValue({ slug: null });
+      expect(await RolesService.hasPermission("u1", "child-slug", "read")).toBe(true);
+      expect(mockUser.findByPk.mock.calls[0][1].include[0].include[0].include[0].where).toEqual({
+        slug: { [Op.in]: ["child-slug"] },
+      });
+    });
+
+    it("should fall back safely when the menu lookup throws", async () => {
+      mockMenuGroup.findOne.mockRejectedValue(new Error("db down"));
+      mockUser.findByPk.mockResolvedValue({
+        role: { status: "active", permissions: [{ permission_type: "write" }] },
+      });
+
+      expect(await RolesService.hasPermission("u1", "dash", "write")).toBe(true);
+      expect(mockUser.findByPk.mock.calls[0][1].include[0].include[0].include[0].where).toEqual({
+        slug: { [Op.in]: ["dash"] },
+      });
+    });
+
+    it("should not look up a parent when the menu has no parentId", async () => {
+      mockMenuGroup.findOne.mockResolvedValue({ parentId: null });
+      mockUser.findByPk.mockResolvedValue({
+        role: { status: "active", permissions: [{ permission_type: "read" }] },
+      });
+
+      expect(await RolesService.hasPermission("u1", "dash")).toBe(true);
+      expect(mockMenuGroup.findByPk).not.toHaveBeenCalled();
+    });
+
+    it("should prefer the camelCase permissionType field when present", async () => {
+      mockUser.findByPk.mockResolvedValue({
+        role: { status: "active", permissions: [{ permissionType: "write" }] },
+      });
+      expect(await RolesService.hasPermission("u1", "dash", "write")).toBe(true);
+    });
+
+    it("should return false for an unrecognised permission type", async () => {
+      mockUser.findByPk.mockResolvedValue({
+        role: { status: "active", permissions: [{ permission_type: "none" }] },
+      });
+      expect(await RolesService.hasPermission("u1", "dash", "read")).toBe(false);
+    });
+
+    it("should return false when the role has no permissions array at all", async () => {
+      mockUser.findByPk.mockResolvedValue({ role: { status: "active" } });
+      expect(await RolesService.hasPermission("u1", "dash")).toBe(false);
+    });
   });
 
   describe("getRolePermissionsMatrix", () => {
@@ -336,6 +423,55 @@ describe("RolesService", () => {
         "child-two-slug": ["write"],
       });
     });
+
+    it("should omit the slug key for a menu that has no slug", async () => {
+      require("../../services/redis.service").get.mockResolvedValue(null);
+      mockRoleMenuPermission.findAll.mockResolvedValue([
+        { menu: { name: "Slugless", slug: null, children: [] }, permission_type: "read" },
+      ]);
+      const result = await RolesService.getRolePermissionsMatrix("r4");
+      expect(result).toEqual({ Slugless: ["read"] });
+    });
+
+    it("should not duplicate a permission type already recorded for a menu", async () => {
+      require("../../services/redis.service").get.mockResolvedValue(null);
+      mockRoleMenuPermission.findAll.mockResolvedValue([
+        { menu: { name: "Dashboard", slug: "dash" }, permissionType: "read" },
+        { menu: { name: "Dashboard", slug: "dash" }, permissionType: "read" },
+        { menu: { name: "Dashboard", slug: "dash" }, permissionType: "write" },
+      ]);
+      const result = await RolesService.getRolePermissionsMatrix("r5");
+      expect(result).toEqual({ Dashboard: ["read", "write"], dash: ["read", "write"] });
+    });
+
+    it("should not duplicate inherited child permissions across parents", async () => {
+      require("../../services/redis.service").get.mockResolvedValue(null);
+      const child = { name: "Child", slug: "child-slug" };
+      const childNoSlug = { name: "Orphan", slug: null };
+      mockRoleMenuPermission.findAll.mockResolvedValue([
+        { menu: { name: "P1", slug: "p1", children: [child, childNoSlug] }, permission_type: "read" },
+        { menu: { name: "P2", slug: "p2", children: [child, childNoSlug] }, permission_type: "read" },
+      ]);
+      const result = await RolesService.getRolePermissionsMatrix("r6");
+      expect(result).toEqual({
+        P1: ["read"],
+        p1: ["read"],
+        P2: ["read"],
+        p2: ["read"],
+        Child: ["read"],
+        "child-slug": ["read"],
+        Orphan: ["read"],
+      });
+    });
+
+    it("should skip child inheritance when the children array is empty", async () => {
+      require("../../services/redis.service").get.mockResolvedValue(null);
+      mockRoleMenuPermission.findAll.mockResolvedValue([
+        { menu: { name: "Leaf", slug: "leaf", children: [] }, permission_type: "write" },
+      ]);
+      const result = await RolesService.getRolePermissionsMatrix("r7");
+      expect(result).toEqual({ Leaf: ["write"], leaf: ["write"] });
+    });
   });
 
   describe("getUserMenus", () => {
@@ -358,6 +494,23 @@ describe("RolesService", () => {
       const result = await RolesService.getUserMenus("u1");
       expect(result.length).toBe(1);
       expect(result[0].menu.slug).toBe("dash");
+    });
+
+    it("should return an empty array when the role has no permissions array", async () => {
+      mockUser.findByPk.mockResolvedValue({ role: {} });
+      expect(await RolesService.getUserMenus("u1")).toEqual([]);
+    });
+
+    it("should prefer the camelCase permissionType field when present", async () => {
+      mockUser.findByPk.mockResolvedValue({
+        role: { permissions: [{ menu: { slug: "dash" }, permissionType: "write" }] },
+      });
+      const result = await RolesService.getUserMenus("u1");
+      expect(result[0]).toEqual({
+        menu: { slug: "dash" },
+        permissionType: "write",
+        permission_type: "write",
+      });
     });
   });
 
@@ -480,6 +633,56 @@ describe("RolesService", () => {
           is_active: false,
         }));
         expect(require("../../services/redis.service").delPattern).toHaveBeenCalledWith("permissions:role:*");
+      });
+
+      it("should update every supplied field", async () => {
+        const mockUpdate = jest.fn();
+        mockMenuGroup.findByPk.mockResolvedValue({ update: mockUpdate });
+
+        await RolesService.updateMenu("m1", {
+          name: " Reports ",
+          slug: " custom-slug ",
+          icon: "chart",
+          parent_id: "p1",
+          sort_order: 5,
+          is_active: true,
+        });
+
+        expect(mockUpdate).toHaveBeenCalledWith({
+          name: "Reports",
+          slug: "custom-slug",
+          icon: "chart",
+          parent_id: "p1",
+          sort_order: 5,
+          is_active: true,
+        });
+      });
+
+      it("should derive the slug from the name when slug is supplied but blank", async () => {
+        const mockUpdate = jest.fn();
+        mockMenuGroup.findByPk.mockResolvedValue({ update: mockUpdate });
+
+        await RolesService.updateMenu("m1", { name: " Dash Board ", slug: "" });
+
+        expect(mockUpdate).toHaveBeenCalledWith({ name: "Dash Board", slug: "dash-board" });
+      });
+
+      it("should leave the slug undefined when both slug and name are blank", async () => {
+        const mockUpdate = jest.fn();
+        mockMenuGroup.findByPk.mockResolvedValue({ update: mockUpdate });
+
+        await RolesService.updateMenu("m1", { slug: null });
+
+        expect(mockUpdate).toHaveBeenCalledWith({ slug: undefined });
+      });
+
+      it("should update nothing when no fields are supplied", async () => {
+        const mockUpdate = jest.fn();
+        mockMenuGroup.findByPk.mockResolvedValue({ update: mockUpdate });
+
+        await RolesService.updateMenu("m1", {});
+
+        expect(mockUpdate).toHaveBeenCalledWith({});
       });
     });
 

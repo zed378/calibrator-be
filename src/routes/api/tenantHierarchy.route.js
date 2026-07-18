@@ -316,12 +316,11 @@ router.get(
  *       401:
  *         description: Unauthorized
  */
-router.post(
-  "/:parentId/children",
-  auth,
-  addChildValidator.validate,
-  addChildTenant,
-);
+// `addChildValidator` is a Joi schema, so `.validate` is Joi's own
+// (value, options) method — passing it as middleware called it with
+// (req, res, next), which threw and 500'd every request. The body is now
+// validated inside addChildTenant against that same schema.
+router.post("/:parentId/children", auth, addChildTenant);
 
 /**
  * @swagger

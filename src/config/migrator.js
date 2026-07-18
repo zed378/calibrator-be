@@ -35,9 +35,15 @@ const migrator = new Umzug({
   migrations: {
     glob: ["*.js", { cwd: path.join(__dirname, "..", "migrations") }],
   },
-  // Umzug v3 passes this object into migration handlers.
-  // Your migrations expect: async up({ context }) => { ... }
-  context: { queryInterface: db.getQueryInterface() },
+  // Umzug v3 passes this straight through as `context` to each handler.
+  //
+  // This MUST be the QueryInterface itself, not { queryInterface }. It was
+  // previously wrapped, so every migration written as `context.describeTable(...)`
+  // — i.e. all but one — hit `undefined`, threw, and had the throw swallowed by
+  // its own `try { ... } catch { return }` table-not-present guard. Umzug then
+  // recorded the migration as applied while it had done nothing, which is how
+  // 0008/0013/0014 came to be marked done with their columns absent.
+  context: db.getQueryInterface(),
   storage: new SequelizeStorage({
     sequelize: db,
     tableName: "schema_migrations",

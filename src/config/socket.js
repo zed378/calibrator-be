@@ -62,6 +62,25 @@ exports.initSocket = (server) => {
       socket.join("super_admins");
     }
 
+    // --- Kanban board rooms (live card/column updates) ---
+    // A client opens a board and asks to join its room; we only let them in
+    // after confirming they can access the project (same auth the REST layer
+    // enforces). Kept lazy-required to avoid a socket <-> service require cycle.
+    socket.on("kanban:join", async (projectId, ack) => {
+      try {
+        const kanban = require("../services/kanban.service");
+        await kanban.assertAccess(socket.user, projectId, "viewer");
+        socket.join(`board_${projectId}`);
+        if (typeof ack === "function") ack({ ok: true });
+      } catch (err) {
+        if (typeof ack === "function") ack({ ok: false, error: err.message });
+      }
+    });
+
+    socket.on("kanban:leave", (projectId) => {
+      socket.leave(`board_${projectId}`);
+    });
+
     socket.on("disconnect", () => {
       console.log(`[Socket] User disconnected: ${socket.user.id}`);
     });
@@ -75,4 +94,16 @@ exports.getIo = () => {
     throw new Error("Socket.io is not initialized!");
   }
   return io;
+};
+
+/**
+ * Emit an event to everyone currently viewing a kanban board. Best-effort:
+ * never throws (a realtime hiccup must not fail the originating request).
+ */
+exports.emitToBoard = (projectId, event, payload) => {
+  try {
+    io && io.to(`board_${projectId}`).emit(event, payload);
+  } catch (err) {
+    console.warn("[Socket] emitToBoard failed:", err.message);
+  }
 };

@@ -564,6 +564,52 @@ describe("warehouse.service", () => {
       expect(tx.commit).toHaveBeenCalled();
     });
 
+    it("should default description to null and isActive to true when omitted", async () => {
+      const tx = mockTransaction();
+      db.transaction.mockResolvedValueOnce(tx);
+      Warehouse.findOne.mockResolvedValueOnce({ id: "wh-1" });
+      StorageLocation.findOne.mockResolvedValueOnce(null);
+      StorageLocation.create.mockResolvedValueOnce({ id: "loc-new" });
+
+      await createLocation("tenant-1", {
+        warehouseId: "wh-1",
+        name: "Loc New",
+        code: "L2",
+      });
+
+      expect(StorageLocation.create).toHaveBeenCalledWith(
+        {
+          tenantId: "tenant-1",
+          warehouseId: "wh-1",
+          name: "Loc New",
+          code: "L2",
+          description: null,
+          isActive: true,
+        },
+        { transaction: tx },
+      );
+    });
+
+    it("should preserve an explicit isActive:false rather than defaulting it to true", async () => {
+      const tx = mockTransaction();
+      db.transaction.mockResolvedValueOnce(tx);
+      Warehouse.findOne.mockResolvedValueOnce({ id: "wh-1" });
+      StorageLocation.findOne.mockResolvedValueOnce(null);
+      StorageLocation.create.mockResolvedValueOnce({ id: "loc-new" });
+
+      await createLocation("tenant-1", {
+        warehouseId: "wh-1",
+        name: "Loc New",
+        code: "L2",
+        isActive: false,
+      });
+
+      expect(StorageLocation.create).toHaveBeenCalledWith(
+        expect.objectContaining({ isActive: false }),
+        { transaction: tx },
+      );
+    });
+
     it("should handle transaction start error in createLocation", async () => {
       db.transaction.mockRejectedValueOnce(new Error("Tx start failed"));
       await expectRejectsWithMessage(
@@ -764,6 +810,117 @@ describe("warehouse.service", () => {
         "Query failed",
       );
       expect(tx.rollback).toHaveBeenCalled();
+    });
+  });
+
+  // ================================================================
+  // A transaction that has already finished must never be rolled back.
+  // Sequelize sets `finished = "commit"` as part of commit(), so a commit that
+  // then fails leaves a finished transaction — rolling it back would throw
+  // "Transaction cannot be rolled back because it has been finished".
+  // ================================================================
+  describe("no rollback after the transaction has finished", () => {
+    const failingCommitTransaction = () => {
+      const tx = {
+        rollback: jest.fn().mockResolvedValue(),
+        commit: jest.fn(async () => {
+          tx.finished = "commit";
+          throw new Error("Commit failed");
+        }),
+      };
+      return tx;
+    };
+
+    it("createWarehouse does not roll back when commit fails", async () => {
+      const tx = failingCommitTransaction();
+      db.transaction.mockResolvedValueOnce(tx);
+      Warehouse.findOne.mockResolvedValueOnce(null);
+      Warehouse.create.mockResolvedValueOnce({ id: "wh-new" });
+
+      await expectRejectsWithMessage(
+        createWarehouse("tenant-1", { name: "WH", code: "W1" }),
+        "Commit failed",
+      );
+      expect(tx.rollback).not.toHaveBeenCalled();
+    });
+
+    it("updateWarehouse does not roll back when commit fails", async () => {
+      const tx = failingCommitTransaction();
+      db.transaction.mockResolvedValueOnce(tx);
+      Warehouse.findOne.mockResolvedValueOnce({
+        id: "wh-1",
+        name: "Old",
+        code: "W1",
+        update: jest.fn().mockResolvedValue(true),
+      });
+
+      await expectRejectsWithMessage(
+        updateWarehouse("tenant-1", "wh-1", { name: "New" }),
+        "Commit failed",
+      );
+      expect(tx.rollback).not.toHaveBeenCalled();
+    });
+
+    it("deleteWarehouse does not roll back when commit fails", async () => {
+      const tx = failingCommitTransaction();
+      db.transaction.mockResolvedValueOnce(tx);
+      Warehouse.findOne.mockResolvedValueOnce({
+        id: "wh-1",
+        softDelete: jest.fn().mockResolvedValue(true),
+      });
+      Stock.count.mockResolvedValueOnce(0);
+
+      await expectRejectsWithMessage(
+        deleteWarehouse("tenant-1", "wh-1"),
+        "Commit failed",
+      );
+      expect(tx.rollback).not.toHaveBeenCalled();
+    });
+
+    it("createLocation does not roll back when commit fails", async () => {
+      const tx = failingCommitTransaction();
+      db.transaction.mockResolvedValueOnce(tx);
+      Warehouse.findOne.mockResolvedValueOnce({ id: "wh-1" });
+      StorageLocation.findOne.mockResolvedValueOnce(null);
+      StorageLocation.create.mockResolvedValueOnce({ id: "loc-new" });
+
+      await expectRejectsWithMessage(
+        createLocation("tenant-1", { warehouseId: "wh-1", name: "L", code: "L1" }),
+        "Commit failed",
+      );
+      expect(tx.rollback).not.toHaveBeenCalled();
+    });
+
+    it("updateLocation does not roll back when commit fails", async () => {
+      const tx = failingCommitTransaction();
+      db.transaction.mockResolvedValueOnce(tx);
+      StorageLocation.findOne.mockResolvedValueOnce({
+        id: "loc-1",
+        warehouseId: "wh-1",
+        update: jest.fn().mockResolvedValue(true),
+      });
+
+      await expectRejectsWithMessage(
+        updateLocation("tenant-1", "loc-1", { name: "New" }),
+        "Commit failed",
+      );
+      expect(tx.rollback).not.toHaveBeenCalled();
+    });
+
+    it("deleteLocation does not roll back when commit fails", async () => {
+      const tx = failingCommitTransaction();
+      db.transaction.mockResolvedValueOnce(tx);
+      StorageLocation.findOne.mockResolvedValueOnce({
+        id: "loc-1",
+        destroy: jest.fn().mockResolvedValue(true),
+      });
+      Stock.count.mockResolvedValueOnce(0);
+
+      await expectRejectsWithMessage(
+        deleteLocation("tenant-1", "loc-1"),
+        "Commit failed",
+      );
+      expect(tx.rollback).not.toHaveBeenCalled();
     });
   });
 });

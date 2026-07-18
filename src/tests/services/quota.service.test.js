@@ -301,6 +301,34 @@ describe("quota.service", () => {
       expect(result).toBe(null);
     });
 
+    it("should return null without querying when no tenantId is given", async () => {
+      const { Tenant } = require("../../models");
+
+      const result = await getUsageSummary(undefined);
+
+      // getTenant short-circuits on a falsy id rather than hitting the DB.
+      expect(result).toBe(null);
+      expect(Tenant.findByPk).not.toHaveBeenCalled();
+    });
+
+    it("should fall back to the free feature set for an unknown plan", async () => {
+      const { Tenant, User, Attachment } = require("../../models");
+      Tenant.findByPk.mockResolvedValue({
+        plan: "legacy-unknown",
+        status: "active",
+        limitSeats: 1,
+        limitStorageMb: 1,
+      });
+      User.count.mockResolvedValue(0);
+      Attachment.sum.mockResolvedValue(0);
+
+      const result = await getUsageSummary("tenant-1");
+
+      // PLAN_FEATURES[plan] is undefined -> falls back to PLAN_FEATURES.free
+      expect(Array.isArray(result.features)).toBe(true);
+      expect(result.plan).toBe("legacy-unknown");
+    });
+
     it("should return usage summary with all fields", async () => {
       const { Tenant } = require("../../models");
       const { User } = require("../../models");

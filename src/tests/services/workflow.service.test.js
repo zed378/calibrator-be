@@ -139,6 +139,50 @@ describe("Workflow Service", () => {
       ).rejects.toThrow("DB error");
       expect(mockTransaction.rollback).toHaveBeenCalled();
     });
+
+    it("should default isActive to true and requiredApprovals to 1 when omitted", async () => {
+      const mockWf = { id: "wf-2", resourceType: "Certificate" };
+      Workflow.update.mockResolvedValue([1]);
+      Workflow.create.mockResolvedValue(mockWf);
+      WorkflowStep.bulkCreate.mockResolvedValue([]);
+      Workflow.findOne.mockResolvedValue(mockWf);
+
+      await workflowService.createWorkflow("tenant-1", {
+        name: "Defaults",
+        resourceType: "Certificate",
+        steps: [{ stepOrder: 1, roleId: "role-1" }],
+      });
+
+      expect(Workflow.create).toHaveBeenCalledWith(
+        expect.objectContaining({ isActive: true }),
+        { transaction: mockTransaction }
+      );
+      expect(WorkflowStep.bulkCreate).toHaveBeenCalledWith(
+        [{ workflowId: "wf-2", stepOrder: 1, roleId: "role-1", requiredApprovals: 1 }],
+        { transaction: mockTransaction }
+      );
+    });
+
+    it("should not deactivate sibling workflows when creating an inactive workflow", async () => {
+      // Only an incoming *active* workflow should deactivate the existing one.
+      const mockWf = { id: "wf-3", resourceType: "Certificate" };
+      Workflow.create.mockResolvedValue(mockWf);
+      WorkflowStep.bulkCreate.mockResolvedValue([]);
+      Workflow.findOne.mockResolvedValue(mockWf);
+
+      await workflowService.createWorkflow("tenant-1", {
+        name: "Inactive",
+        resourceType: "Certificate",
+        isActive: false,
+        steps: [{ stepOrder: 1, roleId: "role-1" }],
+      });
+
+      expect(Workflow.update).not.toHaveBeenCalled();
+      expect(Workflow.create).toHaveBeenCalledWith(
+        expect.objectContaining({ isActive: false }),
+        { transaction: mockTransaction }
+      );
+    });
   });
 
   describe("updateWorkflow", () => {
@@ -184,6 +228,99 @@ describe("Workflow Service", () => {
         workflowService.updateWorkflow("tenant-1", "wf-1", { name: "New" })
       ).rejects.toThrow("Save failed");
       expect(mockTransaction.rollback).toHaveBeenCalled();
+    });
+
+    it("should leave name and steps untouched when the payload omits them", async () => {
+      const mockWf = {
+        id: "wf-1",
+        name: "Old Name",
+        isActive: true,
+        resourceType: "Certificate",
+        save: jest.fn().mockResolvedValue(),
+      };
+      Workflow.findOne.mockResolvedValue(mockWf);
+
+      await workflowService.updateWorkflow("tenant-1", "wf-1", {});
+
+      expect(mockWf.name).toBe("Old Name");
+      expect(mockWf.isActive).toBe(true);
+      expect(Workflow.update).not.toHaveBeenCalled();
+      expect(WorkflowStep.destroy).not.toHaveBeenCalled();
+      expect(WorkflowStep.bulkCreate).not.toHaveBeenCalled();
+      expect(mockWf.save).toHaveBeenCalledWith({ transaction: mockTransaction });
+      expect(mockTransaction.commit).toHaveBeenCalled();
+    });
+
+    it("should deactivate a workflow without deactivating its siblings", async () => {
+      // Turning a workflow OFF must not trigger the "only one active" sweep.
+      const mockWf = {
+        id: "wf-1",
+        name: "Old Name",
+        isActive: true,
+        resourceType: "Certificate",
+        save: jest.fn().mockResolvedValue(),
+      };
+      Workflow.findOne.mockResolvedValue(mockWf);
+
+      await workflowService.updateWorkflow("tenant-1", "wf-1", { isActive: false });
+
+      expect(mockWf.isActive).toBe(false);
+      expect(Workflow.update).not.toHaveBeenCalled();
+      expect(mockWf.save).toHaveBeenCalled();
+    });
+
+    it("should skip the isActive sweep when the value is unchanged", async () => {
+      const mockWf = {
+        id: "wf-1",
+        name: "Old Name",
+        isActive: true,
+        resourceType: "Certificate",
+        save: jest.fn().mockResolvedValue(),
+      };
+      Workflow.findOne.mockResolvedValue(mockWf);
+
+      await workflowService.updateWorkflow("tenant-1", "wf-1", { isActive: true });
+
+      expect(Workflow.update).not.toHaveBeenCalled();
+      expect(mockWf.isActive).toBe(true);
+    });
+
+    it("should ignore an empty steps array rather than wiping existing steps", async () => {
+      const mockWf = {
+        id: "wf-1",
+        name: "Old Name",
+        isActive: true,
+        resourceType: "Certificate",
+        save: jest.fn().mockResolvedValue(),
+      };
+      Workflow.findOne.mockResolvedValue(mockWf);
+
+      await workflowService.updateWorkflow("tenant-1", "wf-1", { steps: [] });
+
+      expect(WorkflowStep.destroy).not.toHaveBeenCalled();
+      expect(WorkflowStep.bulkCreate).not.toHaveBeenCalled();
+    });
+
+    it("should default requiredApprovals to 1 on replaced steps", async () => {
+      const mockWf = {
+        id: "wf-1",
+        name: "Old Name",
+        isActive: true,
+        resourceType: "Certificate",
+        save: jest.fn().mockResolvedValue(),
+      };
+      Workflow.findOne.mockResolvedValue(mockWf);
+      WorkflowStep.destroy.mockResolvedValue(1);
+      WorkflowStep.bulkCreate.mockResolvedValue([]);
+
+      await workflowService.updateWorkflow("tenant-1", "wf-1", {
+        steps: [{ stepOrder: 1, roleId: "role-1" }],
+      });
+
+      expect(WorkflowStep.bulkCreate).toHaveBeenCalledWith(
+        [{ workflowId: "wf-1", stepOrder: 1, roleId: "role-1", requiredApprovals: 1 }],
+        { transaction: mockTransaction }
+      );
     });
   });
 
@@ -265,6 +402,27 @@ describe("Workflow Service", () => {
 
       expect(result.length).toBe(1);
       expect(result[0].id).toBe("instance-1");
+    });
+
+    it("should exclude instances whose current step belongs to a different role", async () => {
+      WorkflowInstance.findAll.mockResolvedValue([
+        {
+          id: "instance-other-role",
+          status: "PENDING",
+          currentStepOrder: 1,
+          workflow: {
+            steps: [{ id: "step-1", stepOrder: 1, roleId: "manager" }],
+          },
+          actions: [],
+        },
+      ]);
+
+      const result = await workflowService.getPendingTasks("tenant-1", {
+        id: "user-1",
+        roleId: "admin",
+      });
+
+      expect(result).toEqual([]);
     });
   });
 
@@ -577,8 +735,235 @@ describe("Workflow Service", () => {
       await expect(
         workflowService.submitAction("tenant-1", "instance-1", { id: "user-1", roleId: "admin" }, { action: "APPROVED" })
       ).rejects.toThrow("Insert error");
-      
+
       expect(mockTransaction.rollback).toHaveBeenCalled();
+    });
+
+    // ----------------------------------------------------------------
+    // Branch coverage: approval tallying
+    // ----------------------------------------------------------------
+    it("should stay on the current step when required approvals are not yet met", async () => {
+      // Step needs 2 approvals and this is the first one — no advance, no finalize.
+      const mockInstance = {
+        id: "instance-1",
+        status: "PENDING",
+        currentStepOrder: 1,
+        workflow: {
+          resourceType: "Certificate",
+          steps: [{ id: "step-1", stepOrder: 1, roleId: "admin", requiredApprovals: 2 }],
+        },
+        actions: [],
+        resourceId: "res-1",
+        save: jest.fn().mockResolvedValue(),
+      };
+      WorkflowInstance.findOne.mockResolvedValue(mockInstance);
+      WorkflowAction.create.mockResolvedValue({});
+
+      const result = await workflowService.submitAction(
+        "tenant-1",
+        "instance-1",
+        { id: "user-1", roleId: "admin" },
+        { action: "APPROVED" }
+      );
+
+      expect(WorkflowAction.create).toHaveBeenCalled();
+      expect(mockInstance.status).toBe("PENDING");
+      expect(mockInstance.currentStepOrder).toBe(1);
+      expect(mockInstance.save).not.toHaveBeenCalled();
+      expect(Certificate.findOne).not.toHaveBeenCalled();
+      expect(mockTransaction.commit).toHaveBeenCalled();
+      expect(result).toEqual({ message: "Action submitted successfully", status: "PENDING" });
+    });
+
+    it("should finalize once a second approver meets the required approvals", async () => {
+      // One prior APPROVED action by another user on this step + this one == 2.
+      const mockInstance = {
+        id: "instance-1",
+        status: "PENDING",
+        currentStepOrder: 1,
+        workflow: {
+          resourceType: "Certificate",
+          steps: [{ id: "step-1", stepOrder: 1, roleId: "admin", requiredApprovals: 2 }],
+        },
+        actions: [
+          { stepId: "step-1", userId: "user-9", action: "APPROVED" },
+        ],
+        resourceId: "res-1",
+        save: jest.fn().mockResolvedValue(),
+      };
+      WorkflowInstance.findOne.mockResolvedValue(mockInstance);
+      WorkflowAction.create.mockResolvedValue({});
+      const mockCert = { id: "res-1", status: "PENDING", save: jest.fn().mockResolvedValue() };
+      Certificate.findOne.mockResolvedValue(mockCert);
+
+      const result = await workflowService.submitAction(
+        "tenant-1",
+        "instance-1",
+        { id: "user-1", roleId: "admin" },
+        { action: "APPROVED" }
+      );
+
+      expect(mockInstance.status).toBe("APPROVED");
+      expect(mockCert.status).toBe("APPROVED");
+      expect(mockCert.approvedById).toBe("user-1");
+      expect(result.status).toBe("APPROVED");
+    });
+
+    it("should count only APPROVED actions belonging to the current step", async () => {
+      // Tally must ignore (a) actions on other steps and (b) non-APPROVED actions
+      // on this step. Neither of the two prior actions counts, so 0 + 1 < 2.
+      const mockInstance = {
+        id: "instance-1",
+        status: "PENDING",
+        currentStepOrder: 1,
+        workflow: {
+          resourceType: "Certificate",
+          steps: [{ id: "step-1", stepOrder: 1, roleId: "admin", requiredApprovals: 2 }],
+        },
+        actions: [
+          { stepId: "step-2", userId: "user-9", action: "APPROVED" }, // other step
+          { stepId: "step-1", userId: "user-8", action: "COMMENTED" }, // not an approval
+        ],
+        resourceId: "res-1",
+        save: jest.fn().mockResolvedValue(),
+      };
+      WorkflowInstance.findOne.mockResolvedValue(mockInstance);
+      WorkflowAction.create.mockResolvedValue({});
+
+      const result = await workflowService.submitAction(
+        "tenant-1",
+        "instance-1",
+        { id: "user-1", roleId: "admin" },
+        { action: "APPROVED" }
+      );
+
+      expect(mockInstance.status).toBe("PENDING");
+      expect(mockInstance.save).not.toHaveBeenCalled();
+      expect(result.status).toBe("PENDING");
+    });
+
+    it("should record an action with a status other than APPROVED/REJECTED without changing the instance", async () => {
+      // submitAction only branches on the two known statuses; anything else is
+      // persisted as an action but leaves the instance untouched.
+      const mockInstance = {
+        id: "instance-1",
+        status: "PENDING",
+        currentStepOrder: 1,
+        workflow: {
+          resourceType: "Certificate",
+          steps: [{ id: "step-1", stepOrder: 1, roleId: "admin", requiredApprovals: 1 }],
+        },
+        actions: [],
+        resourceId: "res-1",
+        save: jest.fn().mockResolvedValue(),
+      };
+      WorkflowInstance.findOne.mockResolvedValue(mockInstance);
+      WorkflowAction.create.mockResolvedValue({});
+
+      const result = await workflowService.submitAction(
+        "tenant-1",
+        "instance-1",
+        { id: "user-1", roleId: "admin" },
+        { action: "ESCALATED", comments: "over to you" }
+      );
+
+      expect(WorkflowAction.create).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "ESCALATED", comments: "over to you" }),
+        { transaction: mockTransaction }
+      );
+      expect(mockInstance.status).toBe("PENDING");
+      expect(mockInstance.save).not.toHaveBeenCalled();
+      expect(mockTransaction.commit).toHaveBeenCalled();
+      expect(result.status).toBe("PENDING");
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // _updateTargetResourceStatus is exercised indirectly by submitAction, which
+  // always passes the approving user. These call it directly to reach the
+  // no-approver / unknown-status / missing-record branches.
+  // ------------------------------------------------------------------
+  describe("_updateTargetResourceStatus", () => {
+    const t = {};
+
+    it("should null out approvedById on a Certificate when no approver is supplied", async () => {
+      const mockCert = { id: "res-1", status: "PENDING", save: jest.fn().mockResolvedValue() };
+      Certificate.findOne.mockResolvedValue(mockCert);
+
+      await workflowService._updateTargetResourceStatus("tenant-1", "Certificate", "res-1", "APPROVED", t);
+
+      expect(mockCert.status).toBe("APPROVED");
+      expect(mockCert.approvedById).toBeNull();
+      expect(mockCert.approvedAt).toBeInstanceOf(Date);
+      expect(mockCert.save).toHaveBeenCalledWith({ transaction: t });
+    });
+
+    it("should null out approvedBy on a StockTransfer when no approver is supplied", async () => {
+      const mockST = { id: "res-1", status: "Pending", save: jest.fn().mockResolvedValue() };
+      StockTransfer.findOne.mockResolvedValue(mockST);
+
+      await workflowService._updateTargetResourceStatus("tenant-1", "StockTransfer", "res-1", "APPROVED", t);
+
+      expect(mockST.status).toBe("Approved");
+      expect(mockST.approvedBy).toBeNull();
+      expect(mockST.save).toHaveBeenCalledWith({ transaction: t });
+    });
+
+    it("should leave a Certificate status untouched for an unrecognised final status", async () => {
+      const mockCert = { id: "res-1", status: "PENDING", save: jest.fn().mockResolvedValue() };
+      Certificate.findOne.mockResolvedValue(mockCert);
+
+      await workflowService._updateTargetResourceStatus("tenant-1", "Certificate", "res-1", "CANCELLED", t);
+
+      expect(mockCert.status).toBe("PENDING");
+      expect(mockCert.save).toHaveBeenCalledWith({ transaction: t });
+    });
+
+    it("should leave a StockTransfer status untouched for an unrecognised final status", async () => {
+      const mockST = { id: "res-1", status: "Pending", save: jest.fn().mockResolvedValue() };
+      StockTransfer.findOne.mockResolvedValue(mockST);
+
+      await workflowService._updateTargetResourceStatus("tenant-1", "StockTransfer", "res-1", "CANCELLED", t);
+
+      expect(mockST.status).toBe("Pending");
+      expect(mockST.save).toHaveBeenCalledWith({ transaction: t });
+    });
+
+    it("should leave a MaintenanceWorkOrder status untouched when rejected", async () => {
+      // Only APPROVED maps to a work-order status ("Completed"); REJECTED is a no-op.
+      const mockWo = { id: "res-1", status: "Open", save: jest.fn().mockResolvedValue() };
+      MaintenanceWorkOrder.findOne.mockResolvedValue(mockWo);
+
+      await workflowService._updateTargetResourceStatus("tenant-1", "MaintenanceWorkOrder", "res-1", "REJECTED", t);
+
+      expect(mockWo.status).toBe("Open");
+      expect(mockWo.save).toHaveBeenCalledWith({ transaction: t });
+    });
+
+    it("should no-op when a StockTransfer record is missing", async () => {
+      StockTransfer.findOne.mockResolvedValue(null);
+
+      await expect(
+        workflowService._updateTargetResourceStatus("tenant-1", "StockTransfer", "gone", "APPROVED", t)
+      ).resolves.toBeUndefined();
+    });
+
+    it("should no-op when a MaintenanceWorkOrder record is missing", async () => {
+      MaintenanceWorkOrder.findOne.mockResolvedValue(null);
+
+      await expect(
+        workflowService._updateTargetResourceStatus("tenant-1", "MaintenanceWorkOrder", "gone", "APPROVED", t)
+      ).resolves.toBeUndefined();
+    });
+
+    it("should no-op for an unknown resource type without querying any model", async () => {
+      await expect(
+        workflowService._updateTargetResourceStatus("tenant-1", "SomethingElse", "res-1", "APPROVED", t)
+      ).resolves.toBeUndefined();
+
+      expect(Certificate.findOne).not.toHaveBeenCalled();
+      expect(StockTransfer.findOne).not.toHaveBeenCalled();
+      expect(MaintenanceWorkOrder.findOne).not.toHaveBeenCalled();
     });
   });
 });

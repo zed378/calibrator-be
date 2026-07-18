@@ -1,4 +1,5 @@
 const fs = require("fs");
+const path = require("path");
 const {
   createBackup,
   downloadBackup,
@@ -121,20 +122,23 @@ exports.getBackup = asyncHandler(async (req, res) => {
 exports.downloadBackup = asyncHandler(async (req, res) => {
   const { backupId } = req.params;
 
-  const result = await downloadBackup(backupId, req.models);
+  // The service returns a {success,status,message,data} envelope; filePath and
+  // metadata live under `.data`. Reading them off the envelope directly made
+  // `result.metadata` undefined and threw on every download.
+  const { data } = await downloadBackup(backupId, req.models);
+  const { filePath, metadata } = data;
 
-  // Set headers for file download
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename="${result.metadata.filename}"`,
-  );
+  // There is no `filename` column — derive it from the stored path.
+  const filename = path.basename(filePath);
+
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.setHeader("Content-Type", "application/zip");
   res.setHeader(
     "Content-Length",
-    result.metadata.fileSize || fs.statSync(result.filePath).size,
+    metadata?.fileSize || fs.statSync(filePath).size,
   );
 
-  return res.download(result.filePath);
+  return res.download(filePath, filename);
 });
 
 /**
@@ -190,5 +194,14 @@ exports.getBackupStats = asyncHandler(async (req, res) => {
 
   const stats = await getBackupStats(tenantId, req.models);
 
-  success(res, stats, null, "Backup statistics retrieved successfully", 200);
+  // This service returns its own {success,status,message,data} envelope (as
+  // createBackup/restoreBackup above do), so unwrap `.data` — passing `stats`
+  // whole nested a second envelope and put the real payload at data.data.
+  success(
+    res,
+    stats.data,
+    null,
+    stats.message || "Backup statistics retrieved successfully",
+    stats.status || 200,
+  );
 });

@@ -33,19 +33,31 @@ describe("eSignature Controller", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    // eSignature uses success(res, data, status, message) or success(res, data, message)
-    success.mockImplementation((res, data, ...rest) => {
-      let status = 200;
-      let message = "success";
-      if (typeof rest[0] === "number") { status = rest[0]; message = rest[1] || "success"; }
-      else { message = rest[0] || "success"; }
-      res.status(status).json({ success: true, data, message });
-    });
+    // Mirrors the REAL success(res, data, metaOrMessage, messageOrStatusCode,
+    // statusCode) from response.util.js. The previous mock invented a
+    // (res, data, status, message) overload that does not exist, which made
+    // `success(res, x, 201, "msg")` look like a 201 — hiding that 201 was
+    // actually landing in `meta` while the response stayed HTTP 200.
+    success.mockImplementation(
+      (res, data = null, metaOrMessage = null, messageOrStatusCode = null, statusCode = 200) => {
+        let message = "success";
+        let status = 200;
+        if (typeof metaOrMessage === "string") {
+          message = metaOrMessage;
+          status = typeof messageOrStatusCode === "number" ? messageOrStatusCode : statusCode;
+        } else {
+          message = typeof messageOrStatusCode === "string" ? messageOrStatusCode : "success";
+          status = statusCode;
+        }
+        res.status(status).json({ success: true, status, message, data });
+      },
+    );
     req = {
       params: {},
       body: {},
       query: {},
       user: { id: "user-1", tenantId: "tenant-1" },
+      get: jest.fn().mockReturnValue(undefined),
     };
     res = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
     next = jest.fn();
@@ -128,20 +140,74 @@ describe("eSignature Controller", () => {
   });
 
   describe("signDocument", () => {
-    it("should sign document", async () => {
-      req.params = { stepId: "step-1" };
-      req.body = { authenticationMethod: "biometric" };
+    // stepId arrives in the (already validated) body — POST /sign has no path
+    // param, so req.params.stepId was always undefined here.
+    it("should sign the step named in the body, as the authenticated user", async () => {
+      req.body = { stepId: "step-1", authenticationMethod: "mfa" };
       eSignatureService.signDocument.mockResolvedValue({ signatureId: "sig-1" });
+
       await eSignatureController.signDocument(req, res, next);
+
+      expect(eSignatureService.signDocument).toHaveBeenCalledWith(
+        "step-1",
+        // req.user.id — NOT req.user.userId, which does not exist.
+        "user-1",
+        expect.objectContaining({ authenticationMethod: "mfa" }),
+      );
       expect(res.json).toHaveBeenCalled();
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it("should fall back to the connection ip/user-agent for the audit trail", async () => {
+      req.body = { stepId: "step-1" };
+      req.ip = "203.0.113.9";
+      req.get = jest.fn().mockReturnValue("Mozilla/5.0");
+      eSignatureService.signDocument.mockResolvedValue({ signatureId: "sig-1" });
+
+      await eSignatureController.signDocument(req, res, next);
+
+      expect(eSignatureService.signDocument).toHaveBeenCalledWith(
+        "step-1",
+        "user-1",
+        expect.objectContaining({
+          ipAddress: "203.0.113.9",
+          userAgent: "Mozilla/5.0",
+        }),
+      );
+    });
+
+    it("should prefer an explicitly supplied ip/user-agent", async () => {
+      req.body = {
+        stepId: "step-1",
+        ipAddress: "198.51.100.4",
+        userAgent: "Custom/1.0",
+      };
+      req.ip = "203.0.113.9";
+      req.get = jest.fn().mockReturnValue("Mozilla/5.0");
+      eSignatureService.signDocument.mockResolvedValue({ signatureId: "sig-1" });
+
+      await eSignatureController.signDocument(req, res, next);
+
+      expect(eSignatureService.signDocument).toHaveBeenCalledWith(
+        "step-1",
+        "user-1",
+        expect.objectContaining({
+          ipAddress: "198.51.100.4",
+          userAgent: "Custom/1.0",
+        }),
+      );
     });
   });
 
   describe("verifySignature", () => {
-    it("should verify signature", async () => {
-      req.params = { signatureId: "sig-1" };
+    // signatureId arrives in the body — POST /verify has no path param.
+    it("should verify the signature named in the body", async () => {
+      req.body = { signatureId: "sig-1" };
       eSignatureService.verifySignature.mockResolvedValue({ valid: true });
+
       await eSignatureController.verifySignature(req, res, next);
+
+      expect(eSignatureService.verifySignature).toHaveBeenCalledWith("sig-1");
       expect(res.json).toHaveBeenCalled();
     });
   });
@@ -178,6 +244,59 @@ describe("eSignature Controller", () => {
     it("should return status", async () => {
       await eSignatureController.getStatus(req, res, next);
       expect(res.json).toHaveBeenCalled();
+    });
+  });
+
+  // List endpoints normalise a null/undefined service result to an empty array
+  // so the client always receives a list.
+  describe("empty-list normalisation", () => {
+    it("returns an empty keyPairs array when the service returns null", async () => {
+      eSignatureService.getKeyPairs.mockResolvedValue(null);
+
+      await eSignatureController.getKeyPairs(req, res, next);
+
+      expect(eSignatureService.getKeyPairs).toHaveBeenCalledWith("tenant-1");
+      expect(success).toHaveBeenCalledWith(res, { keyPairs: [] }, "Key pairs retrieved");
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { keyPairs: [] } }),
+      );
+    });
+
+    it("returns an empty workflows array when the service returns undefined", async () => {
+      eSignatureService.getWorkflows.mockResolvedValue(undefined);
+      req.query = { status: "pending" };
+
+      await eSignatureController.getWorkflows(req, res, next);
+
+      expect(eSignatureService.getWorkflows).toHaveBeenCalledWith("tenant-1", { status: "pending" });
+      expect(success).toHaveBeenCalledWith(res, { workflows: [] }, "Workflows retrieved");
+    });
+
+    it("returns an empty signatures array when the history service returns null", async () => {
+      eSignatureService.getSignatureHistory.mockResolvedValue(null);
+      req.query = { userId: "user-9", startDate: "2026-01-01", endDate: "2026-06-30" };
+
+      await eSignatureController.getSignatureHistory(req, res, next);
+
+      expect(eSignatureService.getSignatureHistory).toHaveBeenCalledWith("tenant-1", {
+        userId: "user-9",
+        startDate: "2026-01-01",
+        endDate: "2026-06-30",
+      });
+      expect(success).toHaveBeenCalledWith(res, { signatures: [] }, "Signature history retrieved");
+    });
+
+    it("passes the signature history through when the service returns rows", async () => {
+      eSignatureService.getSignatureHistory.mockResolvedValue([{ id: "sig-1" }]);
+      req.query = {};
+
+      await eSignatureController.getSignatureHistory(req, res, next);
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        { signatures: [{ id: "sig-1" }] },
+        "Signature history retrieved",
+      );
     });
   });
 });

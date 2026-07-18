@@ -204,6 +204,26 @@ describe("certificateController", () => {
       );
       expect(success).toHaveBeenCalled();
     });
+
+    it("defaults approvedBy to the authenticated user when the body omits it", async () => {
+      req.params = { certificateId: "c-1" };
+      req.body = { authMethod: "password", meaning: "approval" };
+      certificateService.approveCertificate.mockResolvedValue({
+        success: true,
+        status: 200,
+        message: "Success",
+        data: { id: "c-1" },
+      });
+
+      await certificateController.approveCertificate(req, res);
+
+      expect(certificateService.approveCertificate).toHaveBeenCalledWith(
+        "tenant-1",
+        "c-1",
+        req.user.id,
+        expect.objectContaining({ authMethod: "password", meaning: "approval" }),
+      );
+    });
   });
 
   describe("signCertificate", () => {

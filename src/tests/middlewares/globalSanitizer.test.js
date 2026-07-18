@@ -148,4 +148,22 @@ describe("globalSanitizer middleware", () => {
     expect(req.body.avatar.url).toBe("<script>");
     next();
   });
+
+  it("should drop inherited properties and only sanitize own ones", () => {
+    // A prototype-polluted payload: `inherited` is enumerable and therefore
+    // visible to for..in, but the hasOwnProperty guard must exclude it from
+    // the sanitized result.
+    const proto = { inherited: "<img src=x onerror=alert(1)>" };
+    const nested = Object.create(proto);
+    nested.own = "<script>alert(1)</script>";
+    req.body = { nested };
+
+    globalSanitizer(req, res, next);
+
+    expect(Object.prototype.hasOwnProperty.call(req.body.nested, "inherited")).toBe(
+      false,
+    );
+    expect(req.body.nested.own).not.toContain("<script>");
+    expect(next).toHaveBeenCalled();
+  });
 });

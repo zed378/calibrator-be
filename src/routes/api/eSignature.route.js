@@ -2,7 +2,7 @@
  * E-Signature Routes
  *
  * Routes for digital signature workflow management (21 CFR Part 11 compliant).
- * Mounted at /api/v1/e-signature
+ * Mounted at /api/v1/esignature (see index.js) — NOT /api/v1/e-signature.
  */
 
 const express = require("express");
@@ -26,8 +26,14 @@ const {
   createKeyPair: createKeyPairValidator,
   createWorkflow: createWorkflowValidator,
   signDocument: signDocumentValidator,
+  verifySignature: verifySignatureValidator,
 } = require("../../validators/eSignature.validator");
 const { validateUuid } = require("../../middlewares/validateUuid.middleware");
+// These are Joi SCHEMAS. They were previously passed as `schema.validate`,
+// i.e. Joi's own (value, options) method, which express called as
+// (req, res, next) — it threw and 500'd every write route. `validate(schema)`
+// is the router-facing factory.
+const { validate } = require("../../middlewares/validation.middleware");
 
 /**
  * @swagger
@@ -116,7 +122,7 @@ router.get("/key-pairs", auth, getKeyPairs);
  *       401:
  *         description: Unauthorized
  */
-router.post("/key-pairs", auth, denyApiKey, createKeyPairValidator.validate, createKeyPair);
+router.post("/key-pairs", auth, denyApiKey, validate(createKeyPairValidator), createKeyPair);
 
 /**
  * @swagger
@@ -243,12 +249,7 @@ router.get("/workflows", auth, getWorkflows);
  *       401:
  *         description: Unauthorized
  */
-router.post(
-  "/workflows",
-  auth,
-  createWorkflowValidator.validate,
-  createWorkflow,
-);
+router.post("/workflows", auth, validate(createWorkflowValidator), createWorkflow);
 
 /**
  * @swagger
@@ -429,7 +430,7 @@ router.delete(
  *       401:
  *         description: Unauthorized
  */
-router.post("/sign", auth, denyApiKey, signDocumentValidator.validate, signDocument);
+router.post("/sign", auth, denyApiKey, validate(signDocumentValidator), signDocument);
 
 /**
  * @swagger
@@ -472,7 +473,7 @@ router.post("/sign", auth, denyApiKey, signDocumentValidator.validate, signDocum
  *       401:
  *         description: Unauthorized
  */
-router.post("/verify", auth, verifySignature);
+router.post("/verify", auth, validate(verifySignatureValidator), verifySignature);
 
 /**
  * @swagger

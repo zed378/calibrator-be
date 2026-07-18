@@ -77,6 +77,24 @@ const defineModel = (db, DataTypes) => {
         type: DataTypes.STRING(255),
         allowNull: true,
       },
+      // WebAuthn (passkeys / security keys)
+      webauthnEnabled: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: false,
+      },
+      webauthnCredentialId: {
+        type: DataTypes.STRING(255),
+        allowNull: true,
+      },
+      webauthnPublicKey: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+      // Authenticator signature counter, used to detect cloned credentials.
+      webauthnSignCount: {
+        type: DataTypes.INTEGER,
+        defaultValue: 0,
+      },
       // OTP fields
       otpCode: {
         type: DataTypes.STRING(255),

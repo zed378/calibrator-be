@@ -194,6 +194,33 @@ describe("clamAv.service", () => {
         expect(result.code).toBe("OK");
       });
 
+      it("should report FOUND when the socket scan reports an infection", async () => {
+        process.env.CLAMAV_ENABLED = "true";
+
+        jest.spyOn(fs.promises, "stat").mockResolvedValue({ size: 400, mtimeMs: 555 });
+        jest.spyOn(fs, "readFileSync").mockReturnValue(Buffer.from("virus"));
+
+        const clamAvService = require("../../services/clamAv.service");
+        clamAvService.clearCache();
+
+        const checkPromise = clamAvService.scanFile("/path/to/eicar.com");
+        setImmediate(() => {
+          mockSocketInstance.scanResponse = "stream: Eicar-Test-Signature FOUND";
+        });
+
+        const result = await checkPromise;
+
+        expect(result.isClean).toBe(false);
+        expect(result.code).toBe("FOUND");
+        expect(result.result).toBe("stream: Eicar-Test-Signature FOUND");
+
+        const { logger } = require("../../middlewares/activityLog.middleware");
+        expect(logger.warn).toHaveBeenCalledWith(
+          "Virus detected in uploaded file",
+          expect.objectContaining({ filePath: "/path/to/eicar.com" })
+        );
+      });
+
       it("should scan file via socket path CNAME instruction", async () => {
         process.env.CLAMAV_ENABLED = "true";
         process.env.CLAMAV_SOCKET_PATH = "/var/run/clamav/clamd.ctl";

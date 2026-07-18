@@ -29,6 +29,7 @@ A production-ready Express.js API with PostgreSQL, JWT authentication, RBAC, mul
 | **Billing**           | Subscription plans and tenant-level invoices                  |
 | **Notifications**     | System and user-specific alerts and unread counts             |
 | **Audit**             | Immutable FDA 21 CFR Part 11 compliant audit logs             |
+| **Kanban**            | Tenant-scoped project tracker — boards, columns, cards, sprints, realtime (`/api/v1/kanban`) |
 
 ## API Response Format
 
@@ -182,6 +183,7 @@ All endpoints return JSON:
 | POST   | `/api/v1/billing/webhook` | Stripe subscription lifecycle webhook |
 | GET    | `/api/v1/audit` | Fetch immutable FDA CFR Part 11 audit logs |
 | GET    | `/api/v1/api-keys` | Manage scoped API keys |
+| GET    | `/api/v1/kanban/projects` | Tenant-scoped Kanban project tracker (boards, sprints, cards) |
 | WSS    | `/` | Socket.io Real-time connection via JWT handshake |
 
 ### Health Checks

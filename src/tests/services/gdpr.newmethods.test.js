@@ -23,7 +23,31 @@ const gdpr = require("../../services/gdpr.service");
 const { ConsentRecord, DsarRequest, User } = require("../../models");
 
 describe("gdpr.service new methods", () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // isGdprEnabled() reads process.env at call time: anything other than the
+    // literal "false" means enabled.
+    process.env.GDPR_ENABLED = "true";
+  });
+
+  afterEach(() => {
+    delete process.env.GDPR_ENABLED;
+  });
+
+  describe("GDPR kill switch", () => {
+    // Each entry-point guards on isGdprEnabled() and 400s with its own message.
+    it.each([
+      ["updateConsent", () => gdpr.updateConsent("t1", "u1", ["analytics"], true), "Consent management is disabled"],
+      ["rectifyData", () => gdpr.rectifyData("t1", "u1", "firstName", "Jane"), "Rectification is disabled"],
+      ["restrictProcessing", () => gdpr.restrictProcessing("t1", "u1", "reason"), "Processing restriction is disabled"],
+    ])("%s rejects with 400 when GDPR_ENABLED=false", async (_name, invoke, message) => {
+      process.env.GDPR_ENABLED = "false";
+
+      await expect(invoke()).rejects.toMatchObject({ status: 400, message });
+      expect(ConsentRecord.create).not.toHaveBeenCalled();
+      expect(User.update).not.toHaveBeenCalled();
+    });
+  });
 
   describe("updateConsent", () => {
     it("grants each category when consent=true", async () => {
@@ -75,6 +99,20 @@ describe("gdpr.service new methods", () => {
       User.update.mockResolvedValueOnce([0]);
       await expect(gdpr.rectifyData("t1", "u1", "phone", "123")).rejects.toMatchObject({ status: 404 });
     });
+
+    it("still reports success when the audit write fails", async () => {
+      // The audit trail is best-effort: a failure must not undo the rectification.
+      const { AuditLog } = require("../../models");
+      const { logger } = require("../../middlewares/activityLog.middleware");
+      AuditLog.create.mockRejectedValueOnce(new Error("audit table down"));
+
+      const res = await gdpr.rectifyData("t1", "u1", "email", "jane@example.com");
+
+      expect(res).toEqual({ rectified: true, field: "email" });
+      expect(logger.warn).toHaveBeenCalledWith("Failed to audit rectification", {
+        error: "audit table down",
+      });
+    });
   });
 
   describe("restrictProcessing", () => {
@@ -84,6 +122,19 @@ describe("gdpr.service new methods", () => {
         expect.objectContaining({ tenantId: "t1", userId: "u1", type: "restriction" }),
       );
       expect(res).toMatchObject({ restricted: true, requestId: "dsar-1" });
+    });
+
+    it("records a null reason when none is given", async () => {
+      await gdpr.restrictProcessing("t1", "u1");
+
+      expect(DsarRequest.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: "t1",
+          userId: "u1",
+          type: "restriction",
+          details: { reason: null },
+        }),
+      );
     });
   });
 });

@@ -49,4 +49,15 @@ describe("createFolder middleware", () => {
     ensureFolderExisted();
     expect(process.exit).toHaveBeenCalledWith(1);
   });
+
+  it("should handle packaged environment (process.pkg set)", () => {
+    jest.isolateModules(() => {
+      process.pkg = {};
+      const { ensureFolderExisted } = require("../../middlewares/createFolder.middleware");
+      const spyExists = jest.spyOn(fs, "existsSync").mockReturnValue(true);
+      ensureFolderExisted();
+      expect(spyExists).toHaveBeenCalled();
+      delete process.pkg;
+    });
+  });
 });

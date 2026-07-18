@@ -213,5 +213,109 @@ describe("financeController", () => {
       expect(res.setHeader).toHaveBeenCalledWith("Content-Disposition", 'attachment; filename="depreciation-report.csv"');
       expect(res.status).toHaveBeenCalledWith(200);
     });
+
+    it("sends the raw csv body and omits csv from the JSON payload", async () => {
+      req.query = { format: "CSV" };
+      financeService.getDepreciationReport.mockResolvedValue({
+        success: true,
+        status: 200,
+        message: "Depreciation report generated successfully",
+        data: { asOf: "2026-07-14T00:00:00.000Z", count: 0, rows: [], csv: "header\nrow1" },
+      });
+
+      await financeController.getDepreciationReport(req, res, next);
+
+      // format matching is case-insensitive
+      expect(res.send).toHaveBeenCalledWith("header\nrow1");
+      expect(success).not.toHaveBeenCalled();
+    });
+
+    it("strips the csv field out of the JSON report body", async () => {
+      req.query = {};
+      financeService.getDepreciationReport.mockResolvedValue({
+        success: true,
+        status: 200,
+        message: "Depreciation report generated successfully",
+        data: { asOf: "2026-07-14T00:00:00.000Z", count: 2, rows: [], csv: "header\nrow1" },
+      });
+
+      await financeController.getDepreciationReport(req, res, next);
+
+      // req.query.format is undefined -> String(undefined) === "undefined" -> JSON branch
+      expect(financeService.getDepreciationReport).toHaveBeenCalledWith(VALID_TENANT_ID, { asOf: undefined });
+      expect(success).toHaveBeenCalledWith(
+        res,
+        { asOf: "2026-07-14T00:00:00.000Z", count: 2, rows: [] },
+        null,
+        "Depreciation report generated successfully",
+        200,
+      );
+    });
+  });
+
+  // Every handler resolves the tenant as `req.tenantId || req.user.tenantId`,
+  // so an unset req.tenantId must fall back to the JWT's tenant.
+  describe("tenant fallback to req.user.tenantId", () => {
+    beforeEach(() => {
+      req.tenantId = undefined;
+      req.user = { id: "user-1", tenantId: "fallback-tenant" };
+    });
+
+    it("falls back for fetchAssetFinances", async () => {
+      req.query = {};
+      financeService.fetchAssetFinances.mockResolvedValue({
+        success: true, status: 200, message: "ok", data: { rows: [], meta: { total: 0 } },
+      });
+      await financeController.fetchAssetFinances(req, res, next);
+      expect(financeService.fetchAssetFinances).toHaveBeenCalledWith(
+        expect.objectContaining({ tenantId: "fallback-tenant" }),
+      );
+    });
+
+    it("falls back for getAssetFinanceById", async () => {
+      req.params = { financeId: VALID_FINANCE_ID };
+      financeService.getAssetFinanceById.mockResolvedValue({
+        success: true, status: 200, message: "ok", data: { id: VALID_FINANCE_ID },
+      });
+      await financeController.getAssetFinanceById(req, res, next);
+      expect(financeService.getAssetFinanceById).toHaveBeenCalledWith("fallback-tenant", VALID_FINANCE_ID);
+    });
+
+    it("falls back for createAssetFinance", async () => {
+      req.body = { deviceId: "device-1" };
+      financeService.createAssetFinance.mockResolvedValue({
+        success: true, status: 201, message: "ok", data: { id: "fin-new" },
+      });
+      await financeController.createAssetFinance(req, res, next);
+      expect(financeService.createAssetFinance).toHaveBeenCalledWith("fallback-tenant", req.body);
+    });
+
+    it("falls back for updateAssetFinance", async () => {
+      req.params = { financeId: VALID_FINANCE_ID };
+      req.body = { purchasePrice: 1 };
+      financeService.updateAssetFinance.mockResolvedValue({
+        success: true, status: 200, message: "ok", data: {},
+      });
+      await financeController.updateAssetFinance(req, res, next);
+      expect(financeService.updateAssetFinance).toHaveBeenCalledWith("fallback-tenant", VALID_FINANCE_ID, req.body);
+    });
+
+    it("falls back for deleteAssetFinance", async () => {
+      req.params = { financeId: VALID_FINANCE_ID };
+      financeService.deleteAssetFinance.mockResolvedValue({
+        success: true, status: 200, message: "ok", data: null,
+      });
+      await financeController.deleteAssetFinance(req, res, next);
+      expect(financeService.deleteAssetFinance).toHaveBeenCalledWith("fallback-tenant", VALID_FINANCE_ID);
+    });
+
+    it("falls back for getDepreciationReport", async () => {
+      req.query = {};
+      financeService.getDepreciationReport.mockResolvedValue({
+        success: true, status: 200, message: "ok", data: { rows: [], csv: "" },
+      });
+      await financeController.getDepreciationReport(req, res, next);
+      expect(financeService.getDepreciationReport).toHaveBeenCalledWith("fallback-tenant", { asOf: undefined });
+    });
   });
 });

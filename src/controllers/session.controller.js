@@ -76,7 +76,10 @@ exports.getAllSessions = asyncHandlerWithMapping(async (req, res) => {
     lastName: session.user?.lastName || "",
     ipAddress: session.ip_address || "N/A",
     userAgent: session.user_agent || "N/A",
-    device: session.device || "Unknown",
+    // Fall back to the user-agent, as browser/os already do. detectDevice was
+    // written for exactly this but was never called, so a session with no
+    // stored device reported "Unknown" even when the UA said otherwise.
+    device: session.device || detectDevice(session.user_agent),
     browser: detectBrowser(session.user_agent),
     os: detectOS(session.user_agent),
     location: session.location || "N/A",
@@ -152,7 +155,10 @@ exports.getSessionById = asyncHandlerWithMapping(async (req, res) => {
     lastName: session.user?.lastName || "",
     ipAddress: session.ip_address || "N/A",
     userAgent: session.user_agent || "N/A",
-    device: session.device || "Unknown",
+    // Fall back to the user-agent, as browser/os already do. detectDevice was
+    // written for exactly this but was never called, so a session with no
+    // stored device reported "Unknown" even when the UA said otherwise.
+    device: session.device || detectDevice(session.user_agent),
     browser: detectBrowser(session.user_agent),
     os: detectOS(session.user_agent),
     location: session.location || "N/A",

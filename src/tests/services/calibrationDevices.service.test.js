@@ -183,6 +183,24 @@ describe("calibrationDevices.service", () => {
       expect(result.message).toContain("already exists");
     });
 
+    it("skips the duplicate lookup entirely when no serialNumber is supplied", async () => {
+      validator.createCalibrationDeviceSchema.validate.mockReturnValueOnce({
+        error: null,
+        value: { name: "Device A" },
+      });
+      CalibrationDevice.create.mockResolvedValueOnce({ id: "dev-new", name: "Device A" });
+
+      const result = await createCalibrationDevice("tenant-1", { name: "Device A" });
+
+      // A null serialNumber must never be used as a WHERE parameter.
+      expect(CalibrationDevice.findOne).not.toHaveBeenCalled();
+      expect(result.status).toBe(201);
+      expect(CalibrationDevice.create).toHaveBeenCalledWith({
+        name: "Device A",
+        tenantId: "tenant-1",
+      });
+    });
+
     it("should create device successfully if all valid", async () => {
       const inputData = { name: "Device A", serialNumber: "SN123" };
       validator.createCalibrationDeviceSchema.validate.mockReturnValueOnce({
@@ -443,6 +461,103 @@ describe("calibrationDevices.service", () => {
           calibrationIntervalDays: null,
         }),
       ]);
+    });
+
+    it("skips blank lines in the middle of the file", async () => {
+      validator.createCalibrationDeviceSchema.validate.mockImplementation((data) => ({
+        error: null,
+        value: data,
+      }));
+      CalibrationDevice.findAll.mockResolvedValueOnce([]);
+      CalibrationDevice.bulkCreate.mockResolvedValueOnce([]);
+
+      fs.writeFileSync(testCsvPath, "Device Name\nDevice A\n\nDevice B\n");
+
+      const result = await bulkImportCalibrationDevices("tenant-1", testCsvPath);
+
+      // The blank line must not become a third device or a validation error.
+      expect(result.data.successCount).toBe(2);
+      expect(result.data.failedCount).toBe(0);
+      expect(CalibrationDevice.bulkCreate).toHaveBeenCalledWith([
+        expect.objectContaining({ name: "Device A" }),
+        expect.objectContaining({ name: "Device B" }),
+      ]);
+    });
+
+    it("parses a final single-column row that has no trailing newline", async () => {
+      validator.createCalibrationDeviceSchema.validate.mockImplementation((data) => ({
+        error: null,
+        value: data,
+      }));
+      CalibrationDevice.findAll.mockResolvedValueOnce([]);
+      CalibrationDevice.bulkCreate.mockResolvedValueOnce([]);
+
+      fs.writeFileSync(testCsvPath, "Device Name\nDevice A");
+
+      const result = await bulkImportCalibrationDevices("tenant-1", testCsvPath);
+
+      expect(result.data.successCount).toBe(1);
+      expect(CalibrationDevice.bulkCreate).toHaveBeenCalledWith([
+        { name: "Device A", tenantId: "tenant-1" },
+      ]);
+    });
+
+    it("ignores unmapped headers and columns missing from a short row", async () => {
+      validator.createCalibrationDeviceSchema.validate.mockImplementation((data) => ({
+        error: null,
+        value: data,
+      }));
+      CalibrationDevice.findAll.mockResolvedValueOnce([]);
+      CalibrationDevice.bulkCreate.mockResolvedValueOnce([]);
+
+      // "Notes" maps to nothing; the row stops before the "Model" column.
+      fs.writeFileSync(testCsvPath, "Device Name,Notes,Model\nDevice A,some note\n");
+
+      const result = await bulkImportCalibrationDevices("tenant-1", testCsvPath);
+
+      expect(result.data.successCount).toBe(1);
+      expect(CalibrationDevice.bulkCreate).toHaveBeenCalledWith([
+        { name: "Device A", tenantId: "tenant-1" },
+      ]);
+    });
+
+    it("passes a non-numeric calibration interval through unconverted so validation can reject it", async () => {
+      validator.createCalibrationDeviceSchema.validate.mockImplementation((data) => ({
+        error: null,
+        value: data,
+      }));
+      CalibrationDevice.findAll.mockResolvedValueOnce([]);
+      CalibrationDevice.bulkCreate.mockResolvedValueOnce([]);
+
+      fs.writeFileSync(testCsvPath, "Device Name,Calibration Interval Days\nDevice A,not-a-number\n");
+
+      await bulkImportCalibrationDevices("tenant-1", testCsvPath);
+
+      expect(CalibrationDevice.bulkCreate).toHaveBeenCalledWith([
+        expect.objectContaining({ calibrationIntervalDays: "not-a-number" }),
+      ]);
+    });
+
+    it("does not call bulkCreate when every row fails validation", async () => {
+      validator.createCalibrationDeviceSchema.validate.mockImplementation(() => ({
+        error: { details: [{ path: ["name"], message: "Name is required" }] },
+      }));
+      CalibrationDevice.findAll.mockResolvedValueOnce([]);
+
+      fs.writeFileSync(testCsvPath, "Device Name\nDevice A\n");
+
+      const result = await bulkImportCalibrationDevices("tenant-1", testCsvPath);
+
+      expect(CalibrationDevice.bulkCreate).not.toHaveBeenCalled();
+      expect(result.data).toMatchObject({
+        successCount: 0,
+        failedCount: 1,
+        totalCount: 1,
+      });
+      expect(result.data.errors[0]).toEqual({
+        row: 2,
+        errors: [{ field: "name", message: "Name is required" }],
+      });
     });
   });
 });

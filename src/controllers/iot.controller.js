@@ -28,7 +28,10 @@ exports.ingestHttp = async (req, res, next) => {
 
     const result = await iotService.ingestReading(device.tenantId, device.id, payload);
 
-    return res.status(200).json(success("Reading ingested successfully", result));
+    // success(res, data, meta, message, statusCode) sends the response itself.
+    // This previously passed the message as `res`, so `res.status` was
+    // undefined and every successful ingest threw a TypeError into next().
+    return success(res, result, null, "Reading ingested successfully");
   } catch (err) {
     next(err);
   }

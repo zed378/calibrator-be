@@ -156,4 +156,50 @@ describe("gdprController", () => {
       expect(success).toHaveBeenCalled();
     });
   });
+
+  // The `actor(req)` helper resolves tenantId from req.tenantId first, then
+  // falls back to req.user.tenantId, then null. userId comes from req.user.id.
+  describe("actor() resolution", () => {
+    it("falls back to req.user.tenantId when the middleware set no req.tenantId", async () => {
+      gdprService.exportUserData.mockResolvedValue({ exportId: "e-2" });
+      req.tenantId = undefined;
+      await gdprController.exportUserData(req, res);
+      expect(gdprService.exportUserData).toHaveBeenCalledWith(
+        "tenant-123",
+        "user-123",
+      );
+    });
+
+    it("resolves both to null when req.user is absent entirely", async () => {
+      gdprService.getConsentHistory.mockResolvedValue([]);
+      req.tenantId = undefined;
+      req.user = undefined;
+      await gdprController.getConsentHistory(req, res);
+      expect(gdprService.getConsentHistory).toHaveBeenCalledWith(null, null);
+    });
+
+    it("resolves userId to null when req.user carries no id", async () => {
+      gdprService.getProcessingActivities.mockResolvedValue({ activities: [] });
+      req.user = { tenantId: "tenant-123" };
+      await gdprController.getProcessingActivities(req, res);
+      expect(gdprService.getProcessingActivities).toHaveBeenCalledWith(
+        "tenant-123",
+        null,
+      );
+    });
+  });
+
+  describe("requestErasure reason fallback", () => {
+    it("passes reason: null when no reason is supplied", async () => {
+      gdprService.createDsar.mockResolvedValue({ dsarId: "d-2" });
+      req.body = {};
+      await gdprController.requestErasure(req, res);
+      expect(gdprService.createDsar).toHaveBeenCalledWith(
+        "tenant-123",
+        "user-123",
+        "erasure",
+        { reason: null },
+      );
+    });
+  });
 });

@@ -125,6 +125,48 @@ describe("Session Controller", () => {
       expect(success).toHaveBeenCalled();
     });
 
+    // detectDevice() existed but was never called — `device` fell back to the
+    // literal "Unknown" while browser/os were derived from the user-agent. It
+    // is now the fallback, so these pin its classification.
+    describe("device fallback (detectDevice)", () => {
+      /** Map one session row through getAllSessions and read the device out. */
+      const deviceFor = async (session) => {
+        mockSessions.findAndCountAll.mockResolvedValue({
+          count: 1,
+          rows: [session],
+        });
+        success.mockClear();
+
+        await sessionController.getAllSessions(req, res);
+
+        // success(res, { sessions, meta }, null, message, status)
+        return success.mock.calls[0][1].sessions[0].device;
+      };
+
+      it("prefers the stored device when present", async () => {
+        await expect(
+          deviceFor({ ...mockSessionData, device: "Kiosk" }),
+        ).resolves.toBe("Kiosk");
+      });
+
+      it.each([
+        ["Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Mobile/15E148", "Mobile"],
+        ["Mozilla/5.0 (Android 13; Tablet) Firefox/118.0", "Tablet"],
+        ["Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X)", "iPad"],
+        ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0", "Desktop"],
+      ])("derives %s -> %s when no device is stored", async (ua, expected) => {
+        await expect(
+          deviceFor({ ...mockSessionData, device: null, user_agent: ua }),
+        ).resolves.toBe(expected);
+      });
+
+      it("falls back to Desktop when there is no user-agent either", async () => {
+        await expect(
+          deviceFor({ ...mockSessionData, device: null, user_agent: null }),
+        ).resolves.toBe("Desktop");
+      });
+    });
+
     it("should filter by userId", async () => {
       req.query = { userId: VALID_USER_ID };
       mockSessions.findAndCountAll.mockResolvedValue({
@@ -838,6 +880,138 @@ describe("Session Controller", () => {
       const callArgs = success.mock.calls[0];
       const data = callArgs[1];
       expect(data.sessions[0].status).toBe("expired");
+    });
+  });
+// detectBrowser/detectOS parse the stored user_agent for every mapped
+  // session; both fall back to "Unknown" for agents they cannot classify.
+  describe("user-agent parsing", () => {
+    const baseRow = {
+      id: VALID_SESSION_ID,
+      user_id: VALID_USER_ID,
+      user: { username: "u", email: "e@x.com", role: { nameToShow: "User" } },
+      tenant: { id: VALID_TENANT_ID, name: "T" },
+      is_revoked: false,
+      expired_at: new Date(Date.now() + 86400000),
+    };
+
+    const mapOne = async (user_agent) => {
+      mockSessions.findAndCountAll.mockResolvedValue({
+        count: 1,
+        rows: [{ ...baseRow, user_agent }],
+      });
+      await sessionController.getAllSessions(req, res);
+      return success.mock.calls[0][1].sessions[0];
+    };
+
+    it.each([
+      ["Mozilla/5.0 (Windows NT 10.0) Chrome/120 Edg/120", "Microsoft Edge", "Windows"],
+      ["Mozilla/5.0 (Windows NT 10.0) Chrome/120 Safari/537", "Google Chrome", "Windows"],
+      ["Mozilla/5.0 (X11; Linux x86_64) Firefox/121", "Firefox", "Linux"],
+      ["Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) Safari/605", "Safari", "macOS"],
+      ["Mozilla/5.0 (Windows NT 6.1; Trident/7.0; rv:11.0) like Gecko", "Internet Explorer", "Windows"],
+      ["Mozilla/4.0 (compatible; MSIE 8.0)", "Internet Explorer", "Unknown"],
+      ["Dalvik/2.1.0 (Android 13; Pixel)", "Unknown", "Android"],
+      ["MyApp/1.0 CFNetwork ios", "Unknown", "iOS"],
+      ["curl/8.4.0", "Unknown", "Unknown"],
+    ])("classifies %s", async (ua, expectedBrowser, expectedOs) => {
+      const s = await mapOne(ua);
+      expect(s.browser).toBe(expectedBrowser);
+      expect(s.os).toBe(expectedOs);
+      expect(s.userAgent).toBe(ua);
+    });
+
+    it("treats a null user_agent as an unknown browser and OS", async () => {
+      const s = await mapOne(null);
+      expect(s.browser).toBe("Unknown");
+      expect(s.os).toBe("Unknown");
+      expect(s.userAgent).toBe("N/A");
+    });
+  });
+
+  // Rows come back from Sequelize with raw:true/nest:true, so joined user and
+  // tenant data can be absent; the mapping must not throw.
+  describe("sparse session rows", () => {
+    it("substitutes placeholders when user and tenant joins are empty", async () => {
+      mockSessions.findAndCountAll.mockResolvedValue({
+        count: 1,
+        rows: [{
+          id: VALID_SESSION_ID,
+          user_id: VALID_USER_ID,
+          is_revoked: false,
+          expired_at: new Date(Date.now() + 86400000),
+        }],
+      });
+
+      await sessionController.getAllSessions(req, res);
+
+      const s = success.mock.calls[0][1].sessions[0];
+      expect(s).toMatchObject({
+        username: "Unknown",
+        email: "Unknown",
+        firstName: "",
+        lastName: "",
+        ipAddress: "N/A",
+        userAgent: "N/A",
+        // No stored device and no user-agent: detectDevice's own default.
+        // (This asserted "Unknown" while detectDevice was dead code.)
+        device: "Desktop",
+        location: "N/A",
+        role: "User",
+        tenantName: null,
+        status: "active",
+      });
+    });
+
+    it("substitutes placeholders on getSessionById too", async () => {
+      req.params = { id: VALID_SESSION_ID };
+      mockSessions.findByPk.mockResolvedValue({
+        id: VALID_SESSION_ID,
+        user_id: VALID_USER_ID,
+        user: { username: "u", email: "e@x.com" },
+        is_revoked: true,
+        expired_at: new Date(Date.now() + 86400000),
+      });
+
+      await sessionController.getSessionById(req, res);
+
+      const s = success.mock.calls[0][1];
+      // no role join -> default label; is_revoked wins over the future expiry
+      expect(s.role).toBe("User");
+      expect(s.tenantName).toBeNull();
+      expect(s.status).toBe("revoked");
+      expect(s.browser).toBe("Unknown");
+    });
+
+    it("substitutes username/email placeholders when getSessionById has no user join", async () => {
+      req.params = { id: VALID_SESSION_ID };
+      mockSessions.findByPk.mockResolvedValue({
+        id: VALID_SESSION_ID,
+        user_id: VALID_USER_ID,
+        is_revoked: false,
+        expired_at: new Date(Date.now() - 1000),
+      });
+
+      await sessionController.getSessionById(req, res);
+
+      const s = success.mock.calls[0][1];
+      expect(s.username).toBe("Unknown");
+      expect(s.email).toBe("Unknown");
+      expect(s.firstName).toBe("");
+      expect(s.status).toBe("expired");
+    });
+
+    it("defaults page and limit when the query omits them", async () => {
+      req.query = {};
+      mockSessions.findAndCountAll.mockResolvedValue({ count: 0, rows: [] });
+
+      await sessionController.getAllSessions(req, res);
+
+      expect(mockSessions.findAndCountAll).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: 20, offset: 0 }),
+      );
+      expect(success.mock.calls[0][1].meta).toEqual({
+        total: 0, page: 1, limit: 20, totalPages: 0,
+      });
     });
   });
 });

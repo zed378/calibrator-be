@@ -152,6 +152,24 @@ async function verifyAssertion(tenantId, userId, assertionResponse) {
   }
 }
 
+async function getStatus(tenantId, userId) {
+  const user = await Users.findOne({
+    where: { id: userId, tenantId },
+    attributes: ["webauthnEnabled", "webauthnSignCount", "updatedAt"],
+  });
+
+  if (!user) {
+    throw new AppError(404, "User not found");
+  }
+
+  return {
+    enabled: Boolean(user.webauthnEnabled),
+    signCount: user.webauthnSignCount || 0,
+    // The credential id itself is not exposed — only whether one is enrolled.
+    lastUpdatedAt: user.updatedAt || null,
+  };
+}
+
 async function disableWebauthn(tenantId, userId) {
   await Users.update(
     { webauthnEnabled: false, webauthnCredentialId: null, webauthnPublicKey: null },
@@ -161,6 +179,7 @@ async function disableWebauthn(tenantId, userId) {
   return { success: true };
 }
 
+exports.getStatus = getStatus;
 exports.getRegistrationOptions = getCredentialOptions;
 exports.getLoginOptions = getAssertionOptions;
 exports.verifyRegistration = verifyAttestation;

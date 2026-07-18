@@ -158,6 +158,27 @@ describe("billing Controller", () => {
       expect(res.status).toHaveBeenCalledWith(200);
     });
 
+    it("falls back to req.body when the raw-body middleware did not populate req.rawBody", async () => {
+      const mockEvent = { type: "customer.subscription.updated", data: { object: { id: "sub-1" } } };
+      stripeWebhookService.constructEvent.mockReturnValue(mockEvent);
+      stripeWebhookService.handleEvent.mockResolvedValue({ message: "ok" });
+
+      req.rawBody = undefined;
+      req.body = mockEvent;
+      req.headers = { "stripe-signature": "valid-signature" };
+
+      await billingController.handleStripeWebhook(req, res, next);
+
+      expect(stripeWebhookService.constructEvent).toHaveBeenCalledWith(
+        mockEvent,
+        "valid-signature",
+      );
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ received: true, type: "customer.subscription.updated" }),
+      );
+    });
+
     it("should return 400 on invalid signature", async () => {
       stripeWebhookService.constructEvent.mockImplementation(() => {
         throw new Error("Invalid signature");

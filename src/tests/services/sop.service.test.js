@@ -67,9 +67,73 @@ describe("sop.service", () => {
       });
       expect(result.id).toBe("sop-1");
     });
+
+    it("should default version to 1.0 and requiresTraining to true", async () => {
+      mockSopDocument.count.mockResolvedValue(0);
+      mockSopDocument.create.mockImplementation((data) =>
+        Promise.resolve({ id: "sop-2", ...data }),
+      );
+
+      await sopService.createDocument("tenant-1", "user-1", {
+        title: "Minimal SOP",
+      });
+
+      expect(mockSopDocument.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentNumber: "SOP-0001",
+          version: "1.0",
+          requiresTraining: true,
+          status: "DRAFT",
+        }),
+      );
+    });
+
+    it("should preserve requiresTraining:false rather than defaulting it", async () => {
+      mockSopDocument.count.mockResolvedValue(0);
+      mockSopDocument.create.mockImplementation((data) =>
+        Promise.resolve({ id: "sop-3", ...data }),
+      );
+
+      await sopService.createDocument("tenant-1", "user-1", {
+        title: "No training",
+        requiresTraining: false,
+      });
+
+      // `!== undefined ? x : true` must not coerce an explicit false to true.
+      expect(mockSopDocument.create).toHaveBeenCalledWith(
+        expect.objectContaining({ requiresTraining: false }),
+      );
+    });
   });
 
   describe("getDocuments", () => {
+    it("should default to page 1 / limit 10 and omit the status filter", async () => {
+      mockSopDocument.findAndCountAll.mockResolvedValue({ count: 0, rows: [] });
+
+      const result = await sopService.getDocuments("tenant-1");
+
+      expect(mockSopDocument.findAndCountAll).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { tenantId: "tenant-1" },
+          limit: 10,
+          offset: 0,
+        }),
+      );
+      expect(result.page).toBe(1);
+      expect(result.limit).toBe(10);
+    });
+
+    it("should offset correctly for a later page", async () => {
+      mockSopDocument.findAndCountAll.mockResolvedValue({ count: 7, rows: [] });
+
+      const result = await sopService.getDocuments("tenant-1", 2, 5);
+
+      expect(mockSopDocument.findAndCountAll).toHaveBeenCalledWith(
+        expect.objectContaining({ offset: 5, limit: 5 }),
+      );
+      expect(result.totalPages).toBe(2);
+    });
+
     it("should return paginated list of documents", async () => {
       mockSopDocument.findAndCountAll.mockResolvedValue({
         count: 1,
@@ -126,6 +190,25 @@ describe("sop.service", () => {
         { tenantId: "tenant-1", documentId: "sop-1", userId: "user-2", status: "PENDING" },
       ]);
       expect(result.id).toBe("sop-1");
+    });
+
+    it("should publish without assigning training when it is not required", async () => {
+      const mockDoc = {
+        id: "sop-9",
+        requiresTraining: false,
+        status: "DRAFT",
+        save: jest.fn().mockResolvedValue(true),
+      };
+      mockSopDocument.findOne.mockResolvedValue(mockDoc);
+
+      const result = await sopService.publishDocument("tenant-1", "sop-9");
+
+      expect(mockDoc.status).toBe("PUBLISHED");
+      expect(mockDoc.save).toHaveBeenCalled();
+      // No fan-out when the document needs no training.
+      expect(mockUser.findAll).not.toHaveBeenCalled();
+      expect(mockSopTrainingAcknowledgment.bulkCreate).not.toHaveBeenCalled();
+      expect(result.id).toBe("sop-9");
     });
 
     it("should throw 404 AppError if document not found", async () => {

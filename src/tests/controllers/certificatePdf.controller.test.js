@@ -59,9 +59,22 @@ describe("certificatePdf Controller", () => {
 
     it("should handle generation failure", async () => {
       req.params = { certificateId: "cert-1" };
-      certificatePdfService.generateCertificatePdf.mockResolvedValue({ success: false, status: 500, message: "Failed" });
+      certificatePdfService.generateCertificatePdf.mockResolvedValue({ success: false, status: 404, message: "Certificate not found" });
+      await certificatePdfController.generatePdf(req, res, next);
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false, message: "Certificate not found" }),
+      );
+    });
+
+    it("defaults to 500 when the failed result carries no status", async () => {
+      req.params = { certificateId: "cert-1" };
+      certificatePdfService.generateCertificatePdf.mockResolvedValue({ success: false, message: "Renderer crashed" });
       await certificatePdfController.generatePdf(req, res, next);
       expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false, message: "Renderer crashed" }),
+      );
     });
   });
 
@@ -75,9 +88,21 @@ describe("certificatePdf Controller", () => {
 
     it("should handle failure", async () => {
       req.params = { certificateId: "cert-1" };
-      certificatePdfService.getOrCreatePdf.mockResolvedValue({ success: false, status: 500, message: "Failed" });
+      certificatePdfService.getOrCreatePdf.mockResolvedValue({ success: false, status: 403, message: "Forbidden" });
+      await certificatePdfController.downloadPdf(req, res, next);
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.download).not.toHaveBeenCalled();
+    });
+
+    it("defaults to 500 when the failed result carries no status", async () => {
+      req.params = { certificateId: "cert-1" };
+      certificatePdfService.getOrCreatePdf.mockResolvedValue({ success: false, message: "Disk full" });
       await certificatePdfController.downloadPdf(req, res, next);
       expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false, message: "Disk full" }),
+      );
+      expect(res.download).not.toHaveBeenCalled();
     });
   });
 

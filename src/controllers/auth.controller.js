@@ -137,8 +137,12 @@ exports.socketToken = asyncHandlerWithMapping(async (req, res) => {
 
 exports.justUpdatePassword = asyncHandlerWithMapping(async (req, res) => {
   const { id: userId } = req.user;
-  const { newPassword } = req.body;
-  const result = await authService.justUpdatePassword(userId, newPassword);
+  const { newPassword, currentPassword } = req.body;
+  const result = await authService.justUpdatePassword(
+    userId,
+    newPassword,
+    currentPassword,
+  );
   success(res, null, null, result.message, 200);
 }, {});
 
@@ -239,33 +243,10 @@ exports.refresh = asyncHandlerWithMapping(async (req, res) => {
   success(res, result.data, null, result.message, 200);
 }, {});
 
-const mfaService = require("../services/mfa.service");
-
-exports.setupMfa = asyncHandlerWithMapping(
-  async (req, res) => {
-    const user = req.user; // Assuming auth middleware attaches user
-    const { secret, qrCodeDataUrl } = await mfaService.generateSecret(user);
-    success(res, { qrCodeDataUrl }, null, "MFA setup initialized");
-  }
-);
-
-exports.verifyMfaSetup = asyncHandlerWithMapping(
-  async (req, res) => {
-    const user = req.user;
-    const { token } = req.body;
-    if (!token) throw new AppError(400, "Token is required");
-    
-    const isValid = await mfaService.verifyAndEnable(user, token);
-    if (!isValid) throw new AppError(400, "Invalid MFA token");
-    
-    success(res, null, null, "MFA enabled successfully");
-  }
-);
-
-exports.loginMfa = asyncHandlerWithMapping(
-  async (req, res) => {
-    // This would typically be a second step in login, requiring a temporary session or token
-    // For simplicity, assuming a route that accepts a token and some temporary identifier
-    throw new AppError(501, "MFA login flow not fully implemented");
-  }
-);
+// NOTE: setupMfa / verifyMfaSetup / loginMfa were previously DEFINED A SECOND
+// TIME here, silently overwriting the implementations above. The duplicate
+// loginMfa was a stub that threw 501 "MFA login flow not fully implemented",
+// so POST /api/v1/auth/mfa/login could never work and authService.loginMfa
+// (which verifies the temp token and issues the session) was unreachable dead
+// code. The duplicates have been removed; the authService-backed handlers
+// above — the only complete set — are now the live ones.

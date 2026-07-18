@@ -36,6 +36,19 @@ describe("adminService", () => {
   });
 
   describe("getAllTenants", () => {
+    it("should apply page/limit/search defaults when called with no arguments", async () => {
+      Tenants.findAndCountAll.mockResolvedValue({ count: 0, rows: [] });
+
+      const result = await adminService.getAllTenants();
+
+      // page = 1, limit = 10, search = "" come from parameter defaults.
+      expect(Tenants.findAndCountAll).toHaveBeenCalledWith(
+        expect.objectContaining({ where: {}, limit: 10, offset: 0 }),
+      );
+      expect(result.page).toBe(1);
+      expect(result.limit).toBe(10);
+    });
+
     it("should return paginated tenants without search", async () => {
       const page = 1;
       const limit = 10;

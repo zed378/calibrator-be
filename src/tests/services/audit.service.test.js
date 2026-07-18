@@ -211,4 +211,134 @@ describe("audit.service", () => {
         .rejects.toMatchObject({ status: 500, message: "DB connection failed" });
     });
   });
+
+  // ================================================================
+  // Coverage: transform helpers, single-sided filters, error defaults
+  // ================================================================
+  describe("transformLog (via logAction)", () => {
+    it("returns null when the created row is null", async () => {
+      AuditLog.create.mockResolvedValueOnce(null);
+
+      const result = await auditService.logAction({
+        tenantId: "t-1",
+        userId: "u-1",
+        action: "create",
+        resourceType: "tenant",
+      });
+
+      expect(result).toBeNull();
+    });
+
+    it("spreads a plain object row that has no toJSON", async () => {
+      AuditLog.create.mockResolvedValueOnce({ id: "log-1", action: "create" });
+
+      const result = await auditService.logAction({
+        tenantId: "t-1",
+        userId: "u-1",
+        action: "create",
+        resourceType: "tenant",
+      });
+
+      expect(result).toEqual({ id: "log-1", action: "create" });
+    });
+
+    it("uses toJSON when the row is a Sequelize instance", async () => {
+      AuditLog.create.mockResolvedValueOnce({
+        id: "log-1",
+        toJSON: () => ({ id: "log-1", serialized: true }),
+      });
+
+      const result = await auditService.logAction({
+        tenantId: "t-1",
+        userId: "u-1",
+        action: "create",
+        resourceType: "tenant",
+      });
+
+      expect(result).toEqual({ id: "log-1", serialized: true });
+    });
+  });
+
+  describe("fetchAuditLogs coverage gaps", () => {
+    it("filters by resourceId", async () => {
+      AuditLog.findAndCountAll.mockResolvedValueOnce({ count: 0, rows: [] });
+
+      await auditService.fetchAuditLogs({ tenantId: "t-1", resourceId: "res-9" });
+
+      expect(AuditLog.findAndCountAll).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ resourceId: "res-9" }),
+        }),
+      );
+    });
+
+    it("applies only Op.gte when startDate is given without endDate", async () => {
+      const { Op } = require("sequelize");
+      AuditLog.findAndCountAll.mockResolvedValueOnce({ count: 0, rows: [] });
+
+      await auditService.fetchAuditLogs({ tenantId: "t-1", startDate: "2024-01-01" });
+
+      const where = AuditLog.findAndCountAll.mock.calls[0][0].where;
+      expect(where.createdAt[Op.gte]).toEqual(new Date("2024-01-01"));
+      expect(where.createdAt[Op.lte]).toBeUndefined();
+    });
+
+    it("applies only Op.lte when endDate is given without startDate", async () => {
+      const { Op } = require("sequelize");
+      AuditLog.findAndCountAll.mockResolvedValueOnce({ count: 0, rows: [] });
+
+      await auditService.fetchAuditLogs({ tenantId: "t-1", endDate: "2024-12-31" });
+
+      const where = AuditLog.findAndCountAll.mock.calls[0][0].where;
+      expect(where.createdAt[Op.lte]).toEqual(new Date("2024-12-31"));
+      expect(where.createdAt[Op.gte]).toBeUndefined();
+    });
+
+    it("omits createdAt entirely when neither date bound is given", async () => {
+      AuditLog.findAndCountAll.mockResolvedValueOnce({ count: 0, rows: [] });
+
+      await auditService.fetchAuditLogs({ tenantId: "t-1" });
+
+      const where = AuditLog.findAndCountAll.mock.calls[0][0].where;
+      expect(where).not.toHaveProperty("createdAt");
+      expect(where).toEqual({ tenantId: "t-1" });
+    });
+
+    it("falls back to DEFAULT_LIMIT when limit is not a number", async () => {
+      const { DEFAULT_LIMIT } = require("../../constants");
+      AuditLog.findAndCountAll.mockResolvedValueOnce({ count: 0, rows: [] });
+
+      await auditService.fetchAuditLogs({ tenantId: "t-1", limit: "abc" });
+
+      expect(AuditLog.findAndCountAll).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: DEFAULT_LIMIT }),
+      );
+    });
+
+    it("tolerates an undefined rows array from the model", async () => {
+      AuditLog.findAndCountAll.mockResolvedValueOnce({ count: 0, rows: undefined });
+
+      const result = await auditService.fetchAuditLogs({ tenantId: "t-1" });
+
+      expect(result.data.rows).toEqual([]);
+    });
+
+    it("defaults status to 500 and message when the error carries neither", async () => {
+      AuditLog.findAndCountAll.mockRejectedValueOnce({});
+
+      await expect(auditService.fetchAuditLogs({ tenantId: "t-1" })).rejects.toEqual({
+        status: 500,
+        message: "Failed to fetch audit logs",
+      });
+    });
+
+    it("preserves a non-500 status carried by the error", async () => {
+      AuditLog.findAndCountAll.mockRejectedValueOnce({ status: 403, message: "Nope" });
+
+      await expect(auditService.fetchAuditLogs({ tenantId: "t-1" })).rejects.toEqual({
+        status: 403,
+        message: "Nope",
+      });
+    });
+  });
 });

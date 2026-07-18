@@ -166,4 +166,44 @@ describe("calibrationScheduler Controller", () => {
       });
     });
   });
+
+  // parseLeadDays coerces the raw value with Number() and drops anything
+  // non-finite back to undefined so the service applies its own default.
+  describe("parseLeadDays", () => {
+    it("coerces a numeric leadDays string from the body", async () => {
+      req.body.leadDays = "30";
+      calibrationSchedulerService.runCalibrationScan.mockResolvedValue({ scanned: 0 });
+
+      await calibrationSchedulerController.runScan(req, res, next);
+
+      expect(calibrationSchedulerService.runCalibrationScan).toHaveBeenCalledWith({
+        tenantId: VALID_TENANT_ID,
+        leadDays: 30,
+      });
+    });
+
+    it("drops a non-numeric leadDays to undefined", async () => {
+      req.query.leadDays = "soon";
+      calibrationSchedulerService.getDueDevices.mockResolvedValue([]);
+
+      await calibrationSchedulerController.listDue(req, res, next);
+
+      expect(calibrationSchedulerService.getDueDevices).toHaveBeenCalledWith({
+        tenantId: VALID_TENANT_ID,
+        leadDays: undefined,
+      });
+    });
+
+    it("treats a missing body as no leadDays on runScan", async () => {
+      req.body = undefined;
+      calibrationSchedulerService.runCalibrationScan.mockResolvedValue({ scanned: 0 });
+
+      await calibrationSchedulerController.runScan(req, res, next);
+
+      expect(calibrationSchedulerService.runCalibrationScan).toHaveBeenCalledWith({
+        tenantId: VALID_TENANT_ID,
+        leadDays: undefined,
+      });
+    });
+  });
 });

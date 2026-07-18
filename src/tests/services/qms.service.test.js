@@ -71,9 +71,79 @@ describe("qms.service", () => {
         });
         expect(result.id).toBe("nc-1");
       });
+
+      it("should default severity to MEDIUM and dateIdentified to now", async () => {
+        mockNonConformance.count.mockResolvedValue(0);
+        mockNonConformance.create.mockImplementation((data) =>
+          Promise.resolve({ id: "nc-2", ...data }),
+        );
+
+        await qmsService.createNC("tenant-1", "user-1", { title: "Minimal" });
+
+        expect(mockNonConformance.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ncNumber: "NC-00001",
+            severity: "MEDIUM",
+            status: "OPEN",
+            dateIdentified: expect.any(Date),
+          }),
+        );
+      });
+
+      it("should honour an explicitly supplied dateIdentified", async () => {
+        const when = new Date("2026-01-15T00:00:00Z");
+        mockNonConformance.count.mockResolvedValue(0);
+        mockNonConformance.create.mockImplementation((data) =>
+          Promise.resolve({ id: "nc-3", ...data }),
+        );
+
+        await qmsService.createNC("tenant-1", "user-1", {
+          title: "Dated",
+          dateIdentified: when,
+        });
+
+        expect(mockNonConformance.create).toHaveBeenCalledWith(
+          expect.objectContaining({ dateIdentified: when }),
+        );
+      });
     });
 
     describe("getNCs", () => {
+      it("should default to page 1 / limit 10 and omit the status filter", async () => {
+        mockNonConformance.findAndCountAll.mockResolvedValue({
+          count: 0,
+          rows: [],
+        });
+
+        const result = await qmsService.getNCs("tenant-1");
+
+        expect(mockNonConformance.findAndCountAll).toHaveBeenCalledWith(
+          expect.objectContaining({
+            // No `status` key when no filter is passed.
+            where: { tenantId: "tenant-1" },
+            limit: 10,
+            offset: 0,
+          }),
+        );
+        expect(result.page).toBe(1);
+        expect(result.limit).toBe(10);
+        expect(result.totalPages).toBe(0);
+      });
+
+      it("should offset correctly for a later page", async () => {
+        mockNonConformance.findAndCountAll.mockResolvedValue({
+          count: 25,
+          rows: [],
+        });
+
+        const result = await qmsService.getNCs("tenant-1", 3, 10);
+
+        expect(mockNonConformance.findAndCountAll).toHaveBeenCalledWith(
+          expect.objectContaining({ offset: 20, limit: 10 }),
+        );
+        expect(result.totalPages).toBe(3);
+      });
+
       it("should return paginated list of non-conformances", async () => {
         mockNonConformance.findAndCountAll.mockResolvedValue({
           count: 1,
@@ -184,6 +254,33 @@ describe("qms.service", () => {
     });
 
     describe("getCapas", () => {
+      it("should default to page 1 / limit 10 and omit the status filter", async () => {
+        mockCapa.findAndCountAll.mockResolvedValue({ count: 0, rows: [] });
+
+        const result = await qmsService.getCapas("tenant-1");
+
+        expect(mockCapa.findAndCountAll).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { tenantId: "tenant-1" },
+            limit: 10,
+            offset: 0,
+          }),
+        );
+        expect(result.page).toBe(1);
+        expect(result.limit).toBe(10);
+      });
+
+      it("should offset correctly for a later page", async () => {
+        mockCapa.findAndCountAll.mockResolvedValue({ count: 11, rows: [] });
+
+        const result = await qmsService.getCapas("tenant-1", 2, 5);
+
+        expect(mockCapa.findAndCountAll).toHaveBeenCalledWith(
+          expect.objectContaining({ offset: 5, limit: 5 }),
+        );
+        expect(result.totalPages).toBe(3);
+      });
+
       it("should return paginated list of CAPAs", async () => {
         mockCapa.findAndCountAll.mockResolvedValue({
           count: 1,

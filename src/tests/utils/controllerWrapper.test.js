@@ -70,19 +70,67 @@ describe("asyncHandler", () => {
 });
 
 describe("asyncHandlerWithMapping", () => {
-  it("should pass successful response without calling sendError", async () => {
-    const mockFn = asyncHandlerWithMapping(async (req, res) => {
-      return { data: "ok" };
+  // This used to assert res.json was NOT called on success, which pinned the
+  // bug: handlers that return an envelope (admin, qms, sop, batchJob) produced
+  // no response at all and hung until the 30s timeout → 503.
+  it("should send a returned envelope and not call sendError", async () => {
+    const mockFn = asyncHandlerWithMapping(async () => {
+      return { success: true, status: 200, message: "ok", data: { a: 1 } };
     });
     const req = {};
     const res = {
       status: jest.fn().mockReturnThis(),
       json: jest.fn(),
+      headersSent: false,
     };
     const next = jest.fn();
 
     await mockFn(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      status: 200,
+      message: "ok",
+      data: { a: 1 },
+    });
     expect(next).not.toHaveBeenCalled();
+  });
+
+  it("should honour the status on a returned envelope", async () => {
+    const mockFn = asyncHandlerWithMapping(async () => ({
+      success: true,
+      status: 201,
+      message: "created",
+      data: null,
+    }));
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn(), headersSent: false };
+
+    await mockFn({}, res, jest.fn());
+
+    expect(res.status).toHaveBeenCalledWith(201);
+  });
+
+  it("should not double-send when the handler already responded", async () => {
+    const mockFn = asyncHandlerWithMapping(async (req, res) => {
+      res.status(200).json({ sent: "by handler" });
+      res.headersSent = true;
+      return { success: true, status: 200, message: "ignored", data: null };
+    });
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn(), headersSent: false };
+
+    await mockFn({}, res, jest.fn());
+
+    expect(res.json).toHaveBeenCalledTimes(1);
+    expect(res.json).toHaveBeenCalledWith({ sent: "by handler" });
+  });
+
+  it("should do nothing when the handler returns undefined", async () => {
+    const mockFn = asyncHandlerWithMapping(async () => undefined);
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn(), headersSent: false };
+
+    await mockFn({}, res, jest.fn());
+
     expect(res.json).not.toHaveBeenCalled();
   });
 

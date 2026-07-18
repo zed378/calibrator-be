@@ -41,7 +41,7 @@ describe("seedMenuGroups utility", () => {
     jest.clearAllMocks();
     MenuGroup.findAll.mockResolvedValue([]);
     
-    const parentSlugs = ["home", "dashboard", "account", "management", "equipment", "security", "warehouse"];
+    const parentSlugs = ["home", "dashboard", "account", "management", "equipment", "security", "warehouse", "mgmt-organization", "mgmt-work", "mgmt-quality", "mgmt-finance", "mgmt-partners", "mgmt-developer", "mgmt-content"];
     MenuGroup.findOne.mockImplementation((query) => {
       const slug = query && query.where && query.where.slug;
       if (slug && parentSlugs.includes(slug)) {
@@ -59,7 +59,7 @@ describe("seedMenuGroups utility", () => {
 
   describe("seedMenuGroups", () => {
     it("should seed parent menu groups successfully", async () => {
-      const parentSlugs = ["home", "dashboard", "account", "management", "equipment", "security", "warehouse"];
+      const parentSlugs = ["home", "dashboard", "account", "management", "equipment", "security", "warehouse", "mgmt-organization", "mgmt-work", "mgmt-quality", "mgmt-finance", "mgmt-partners", "mgmt-developer", "mgmt-content"];
       let callCount = 0;
       MenuGroup.findOne.mockImplementation((query) => {
         callCount++;
@@ -78,7 +78,7 @@ describe("seedMenuGroups utility", () => {
     });
 
     it("should seed child menu groups with parent references", async () => {
-      const parentSlugs = ["home", "dashboard", "account", "management", "equipment", "security", "warehouse"];
+      const parentSlugs = ["home", "dashboard", "account", "management", "equipment", "security", "warehouse", "mgmt-organization", "mgmt-work", "mgmt-quality", "mgmt-finance", "mgmt-partners", "mgmt-developer", "mgmt-content"];
       MenuGroup.findOne.mockImplementation((query) => {
         const slug = query && query.where && query.where.slug;
         if (slug && parentSlugs.includes(slug)) {
@@ -116,7 +116,7 @@ describe("seedMenuGroups utility", () => {
       };
       MenuGroup.findAll.mockResolvedValue([deprecatedGroup]);
 
-      const parentSlugs = ["home", "dashboard", "account", "management", "equipment", "security", "warehouse"];
+      const parentSlugs = ["home", "dashboard", "account", "management", "equipment", "security", "warehouse", "mgmt-organization", "mgmt-work", "mgmt-quality", "mgmt-finance", "mgmt-partners", "mgmt-developer", "mgmt-content"];
       MenuGroup.findOne.mockImplementation((query) => {
         const slug = query && query.where && query.where.slug;
         if (slug && parentSlugs.includes(slug)) {
@@ -134,7 +134,7 @@ describe("seedMenuGroups utility", () => {
     });
 
     it("should retry creation when fixed ID fails", async () => {
-      const parentSlugs = ["home", "dashboard", "account", "management", "equipment", "security", "warehouse"];
+      const parentSlugs = ["home", "dashboard", "account", "management", "equipment", "security", "warehouse", "mgmt-organization", "mgmt-work", "mgmt-quality", "mgmt-finance", "mgmt-partners", "mgmt-developer", "mgmt-content"];
       let callCount = 0;
       MenuGroup.findOne.mockImplementation((query) => {
         callCount++;
@@ -178,7 +178,7 @@ describe("seedMenuGroups utility", () => {
     });
 
     it("should handle child menu group seeding failure", async () => {
-      const parentSlugs = ["home", "dashboard", "account", "management", "equipment", "security", "warehouse"];
+      const parentSlugs = ["home", "dashboard", "account", "management", "equipment", "security", "warehouse", "mgmt-organization", "mgmt-work", "mgmt-quality", "mgmt-finance", "mgmt-partners", "mgmt-developer", "mgmt-content"];
       MenuGroup.findOne.mockImplementation((query) => {
         const slug = query && query.where && query.where.slug;
         if (slug === "equipment") {

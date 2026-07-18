@@ -217,5 +217,57 @@ describe("calibrationDevicesController", () => {
       );
       expect(fs.unlink).toHaveBeenCalledWith("temp-path/import.csv", expect.any(Function));
     });
+
+    // The unlink callback logs only for real failures — a missing temp file
+    // (ENOENT) is expected and must stay silent.
+    it("logs when deleting the temp file fails for a reason other than ENOENT", async () => {
+      const fs = require("fs");
+      const consoleSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      fs.unlink.mockImplementation((path, cb) => cb({ code: "EACCES", message: "denied" }));
+      req.file = { path: "temp-path/import.csv" };
+      calibrationDevicesService.bulkImportCalibrationDevices.mockResolvedValue({
+        success: true, status: 200, message: "Success", data: { successCount: 1, failedCount: 0 },
+      });
+
+      await calibrationDevicesController.bulkImportCalibrationDevices(req, res);
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "Failed to delete temp import file: temp-path/import.csv",
+        expect.objectContaining({ code: "EACCES" }),
+      );
+      expect(success).toHaveBeenCalled();
+      consoleSpy.mockRestore();
+      fs.unlink.mockImplementation((path, cb) => cb && cb(null));
+    });
+
+    it("stays silent when the temp file is already gone (ENOENT)", async () => {
+      const fs = require("fs");
+      const consoleSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      fs.unlink.mockImplementation((path, cb) => cb({ code: "ENOENT" }));
+      req.file = { path: "temp-path/import.csv" };
+      calibrationDevicesService.bulkImportCalibrationDevices.mockResolvedValue({
+        success: true, status: 200, message: "Success", data: { successCount: 1, failedCount: 0 },
+      });
+
+      await calibrationDevicesController.bulkImportCalibrationDevices(req, res);
+
+      expect(consoleSpy).not.toHaveBeenCalled();
+      consoleSpy.mockRestore();
+      fs.unlink.mockImplementation((path, cb) => cb && cb(null));
+    });
+
+    it("still deletes the temp file when the import service throws", async () => {
+      const fs = require("fs");
+      req.file = { path: "temp-path/bad.csv" };
+      calibrationDevicesService.bulkImportCalibrationDevices.mockRejectedValue(
+        Object.assign(new Error("Malformed CSV"), { status: 422 }),
+      );
+
+      await calibrationDevicesController.bulkImportCalibrationDevices(req, res);
+
+      expect(fs.unlink).toHaveBeenCalledWith("temp-path/bad.csv", expect.any(Function));
+      expect(error.mock.calls[0][1]).toBe("Malformed CSV");
+      expect(error.mock.calls[0][2]).toBe(422);
+    });
   });
 });

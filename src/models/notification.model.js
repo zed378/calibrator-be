@@ -13,6 +13,12 @@ module.exports = (sequelize) => {
         as: "user",
         onDelete: "CASCADE",
       });
+      // Per-recipient read/hidden flags (see notificationState.model.js).
+      Notification.hasMany(models.NotificationState, {
+        foreignKey: "notificationId",
+        as: "states",
+        onDelete: "CASCADE",
+      });
     }
   }
 

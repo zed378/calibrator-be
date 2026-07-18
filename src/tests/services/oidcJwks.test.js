@@ -480,4 +480,266 @@ describe("oidcJwks", () => {
       expect(typeof stats.ttl).toBe("number");
     });
   });
+
+  // ================================================================
+  // Coverage: cache TTL expiry, JWKS shape validation, error branches
+  // ================================================================
+  describe("JWKS cache TTL", () => {
+    const validJwks = { keys: [{ kid: "k1", kty: "RSA", n: "n", e: "AQAB" }] };
+
+    it("serves the second call from cache without re-fetching", async () => {
+      axios.get.mockResolvedValue({ data: validJwks });
+
+      await oidcJwks.getJwksInfo("https://issuer.com");
+      await oidcJwks.getJwksInfo("https://issuer.com");
+
+      expect(axios.get).toHaveBeenCalledTimes(1);
+      expect(oidcJwks.getCacheStats().size).toBe(1);
+    });
+
+    it("re-fetches once the cached entry has passed its TTL", async () => {
+      axios.get.mockResolvedValue({ data: validJwks });
+      const { ttl } = oidcJwks.getCacheStats();
+      const realNow = Date.now;
+
+      try {
+        const t0 = realNow.call(Date);
+        Date.now = jest.fn(() => t0);
+        await oidcJwks.getJwksInfo("https://issuer.com");
+        expect(axios.get).toHaveBeenCalledTimes(1);
+
+        // Jump just past the TTL — the entry must be evicted and re-fetched.
+        Date.now = jest.fn(() => t0 + ttl + 1);
+        await oidcJwks.getJwksInfo("https://issuer.com");
+        expect(axios.get).toHaveBeenCalledTimes(2);
+      } finally {
+        Date.now = realNow;
+      }
+    });
+
+    it("normalizes a trailing slash on the issuer before building the JWKS URL", async () => {
+      axios.get.mockResolvedValue({ data: validJwks });
+
+      await oidcJwks.getJwksInfo("https://issuer.com/");
+
+      expect(axios.get).toHaveBeenCalledWith(
+        "https://issuer.com/.well-known/jwks.json",
+        expect.any(Object),
+      );
+    });
+  });
+
+  describe("fetchJwks response validation", () => {
+    it("rejects a response with no body", async () => {
+      axios.get.mockResolvedValue({ data: null });
+
+      await expect(oidcJwks.getJwksInfo("https://issuer.com")).rejects.toMatchObject({
+        status: 500,
+        message: "Invalid JWKS response from IdP",
+      });
+    });
+
+    it("rejects a response whose keys field is not an array", async () => {
+      axios.get.mockResolvedValue({ data: { keys: "nope" } });
+
+      await expect(oidcJwks.getJwksInfo("https://issuer.com")).rejects.toMatchObject({
+        status: 500,
+        message: "Invalid JWKS response from IdP",
+      });
+    });
+
+    it("rejects a response with an empty keys array", async () => {
+      axios.get.mockResolvedValue({ data: { keys: [] } });
+
+      await expect(oidcJwks.getJwksInfo("https://issuer.com")).rejects.toMatchObject({
+        status: 500,
+        message: "Invalid JWKS response from IdP",
+      });
+    });
+
+    it("maps an HTTP error response to a 500 and does not cache it", async () => {
+      const httpErr = new Error("Request failed with status code 404");
+      httpErr.response = { status: 404, data: { error: "not_found" } };
+      axios.get.mockRejectedValue(httpErr);
+
+      await expect(oidcJwks.getJwksInfo("https://issuer.com")).rejects.toMatchObject({
+        status: 500,
+        message: "Failed to fetch IdP public keys",
+      });
+
+      const { logger } = require("../../middlewares/activityLog.middleware");
+      expect(logger.error).toHaveBeenCalledWith(
+        "JWKS fetch failed",
+        expect.objectContaining({ status: 404 }),
+      );
+      expect(oidcJwks.getCacheStats().size).toBe(0);
+    });
+
+    it("maps a network error (no response) to a 500", async () => {
+      axios.get.mockRejectedValue(new Error("ETIMEDOUT"));
+
+      await expect(oidcJwks.getJwksInfo("https://issuer.com")).rejects.toMatchObject({
+        status: 500,
+        message: "Failed to fetch IdP public keys",
+      });
+
+      const { logger } = require("../../middlewares/activityLog.middleware");
+      expect(logger.error).toHaveBeenCalledWith(
+        "JWKS fetch error",
+        expect.objectContaining({ error: "ETIMEDOUT" }),
+      );
+    });
+  });
+
+  describe("verifyIdToken unexpected errors", () => {
+    it("rethrows an error that is neither an AppError nor a JWT error", async () => {
+      jwt.decode.mockReturnValue({ header: { kid: "k1", alg: "RS256" } });
+      axios.get.mockResolvedValue({
+        data: { keys: [{ kid: "k1", kty: "RSA", n: "n", e: "AQAB" }] },
+      });
+      const boom = new TypeError("jwkToPem exploded");
+      jwt.verify.mockImplementation(() => {
+        throw boom;
+      });
+
+      await expect(
+        oidcJwks.verifyIdToken("token", "https://issuer.com", "client-1"),
+      ).rejects.toBe(boom);
+    });
+  });
+
+  describe("verifyOidcCallback unexpected errors", () => {
+    it("maps a non-AppError token-exchange failure to a 401", async () => {
+      const netErr = new Error("socket hang up");
+      netErr.response = { data: { error: "invalid_grant" } };
+      axios.post.mockRejectedValue(netErr);
+
+      await expect(
+        oidcJwks.verifyOidcCallback(
+          "code-1",
+          { oidc_client_id: "c1", oidc_client_secret: "s1" },
+          "https://sp/callback",
+        ),
+      ).rejects.toMatchObject({ status: 401, message: "OIDC authentication failed" });
+
+      const { logger } = require("../../middlewares/activityLog.middleware");
+      expect(logger.error).toHaveBeenCalledWith(
+        "OIDC verification error",
+        expect.objectContaining({
+          error: "socket hang up",
+          response: { error: "invalid_grant" },
+        }),
+      );
+    });
+
+    it("maps a non-AppError failure with no response payload to a 401", async () => {
+      axios.post.mockRejectedValue(new Error("boom"));
+
+      await expect(
+        oidcJwks.verifyOidcCallback(
+          "code-1",
+          { oidc_client_id: "c1", oidc_client_secret: "s1" },
+          "https://sp/callback",
+        ),
+      ).rejects.toMatchObject({ status: 401, message: "OIDC authentication failed" });
+    });
+  });
+
+  describe("verifyOidcCallback email claim fallback chain", () => {
+    const settings = { oidc_client_id: "c1", oidc_client_secret: "s1" };
+
+    // Drives the real verifyIdToken path up to jwt.verify, which returns `claims`.
+    const withClaims = (claims) => {
+      axios.post.mockResolvedValue({ data: { id_token: "tok" } });
+      jwt.decode.mockReturnValue({ header: { kid: "k1", alg: "RS256" } });
+      axios.get.mockResolvedValue({
+        data: { keys: [{ kid: "k1", kty: "RSA", n: "n", e: "AQAB" }] },
+      });
+      jwt.verify.mockReturnValue(claims);
+    };
+
+    it("falls back to preferred_username when email is absent", async () => {
+      withClaims({ preferred_username: "Bob@Example.COM" });
+
+      const result = await oidcJwks.verifyOidcCallback("c", settings, "https://cb");
+
+      expect(result.email).toBe("bob@example.com");
+    });
+
+    it("falls back to upn when email and preferred_username are absent", async () => {
+      withClaims({ upn: "Carol@Example.COM" });
+
+      const result = await oidcJwks.verifyOidcCallback("c", settings, "https://cb");
+
+      expect(result.email).toBe("carol@example.com");
+    });
+
+    it("yields an empty email when no email-ish claim is present", async () => {
+      withClaims({ sub: "abc" });
+
+      const result = await oidcJwks.verifyOidcCallback("c", settings, "https://cb");
+
+      expect(result.email).toBe("");
+    });
+
+    it("derives firstName from the name claim when given_name is absent", async () => {
+      withClaims({ email: "d@e.com", name: "Dave Smith" });
+
+      const result = await oidcJwks.verifyOidcCallback("c", settings, "https://cb");
+
+      expect(result.firstName).toBe("Dave");
+      expect(result.lastName).toBe("User");
+    });
+
+    it("defaults firstName/lastName when neither given_name nor name is present", async () => {
+      withClaims({ email: "d@e.com" });
+
+      const result = await oidcJwks.verifyOidcCallback("c", settings, "https://cb");
+
+      expect(result.firstName).toBe("SSO");
+      expect(result.lastName).toBe("User");
+    });
+
+    it("passes through the audit claims", async () => {
+      withClaims({
+        email: "d@e.com",
+        given_name: "Dave",
+        family_name: "Smith",
+        nonce: "n1",
+        auth_time: 1700000000,
+        acr: "1",
+        amr: ["pwd"],
+        sub: "sub-1",
+      });
+
+      const result = await oidcJwks.verifyOidcCallback("c", settings, "https://cb");
+
+      expect(result).toEqual({
+        email: "d@e.com",
+        firstName: "Dave",
+        lastName: "Smith",
+        nonce: "n1",
+        authTime: 1700000000,
+        acr: "1",
+        amr: ["pwd"],
+        sub: "sub-1",
+      });
+    });
+
+    it("uses the configured authority for the token endpoint when supplied", async () => {
+      withClaims({ email: "d@e.com" });
+
+      await oidcJwks.verifyOidcCallback(
+        "code-9",
+        { ...settings, oidc_authority: "https://login.example.com/t1/oauth2/v2.0" },
+        "https://cb",
+      );
+
+      expect(axios.post).toHaveBeenCalledWith(
+        "https://login.example.com/t1/oauth2/v2.0/token",
+        expect.stringContaining("code=code-9"),
+        expect.any(Object),
+      );
+    });
+  });
 });

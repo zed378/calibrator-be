@@ -82,7 +82,7 @@ describe("user avatar upload (consolidated into user.service)", () => {
         "uploads/profile",
       );
       expect(mockUser.update).toHaveBeenCalledWith(
-        { avatar_url: "new-avatar.png" },
+        { avatarUrl: "new-avatar.png" },
         { silent: true },
       );
       expect(logger.info).toHaveBeenCalledWith(
@@ -109,7 +109,7 @@ describe("user avatar upload (consolidated into user.service)", () => {
 
       expect(deleteUpload).not.toHaveBeenCalled();
       expect(mockUser.update).toHaveBeenCalledWith(
-        { avatar_url: "new-avatar.png" },
+        { avatarUrl: "new-avatar.png" },
         { silent: true },
       );
       expect(result).toEqual({
@@ -150,7 +150,7 @@ describe("user avatar upload (consolidated into user.service)", () => {
         "uploads/profile",
       );
       expect(mockUser.update).toHaveBeenCalledWith(
-        { picture: "default.svg" },
+        { avatarUrl: "default.svg" },
         { silent: true },
       );
       expect(logger.info).toHaveBeenCalledWith(

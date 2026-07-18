@@ -270,6 +270,26 @@ describe("auth middleware", () => {
       expect(req.user.isApiKey).toBe(true);
     });
 
+    it("should accept an API key whose tenant has no status field", async () => {
+      const mockKey = {
+        id: "api-key-123",
+        tenantId: "tenant-123",
+        tenant: { id: "tenant-123" },
+        scopes: ["read"],
+      };
+
+      req.headers.authorization = "ApiKey test-api-key";
+      apiKeyService.verifyApiKey.mockResolvedValue(mockKey);
+
+      await auth(req, res, next);
+
+      // A missing status normalizes to "" — neither suspended nor deleted.
+      expect(forbidden).not.toHaveBeenCalled();
+      expect(req.user.isApiKey).toBe(true);
+      expect(req.user.role).toEqual({ id: null, name: "API_KEY" });
+      expect(next).toHaveBeenCalled();
+    });
+
     it("should handle API key with undefined scopes", async () => {
       const mockKey = {
         id: "api-key-123",
@@ -573,6 +593,68 @@ describe("auth middleware", () => {
 
       expect(next).toHaveBeenCalled();
       expect(req.user).toBeNull();
+    });
+
+    it("should not attach a user whose status is neither ACTIVE nor INACTIVE", async () => {
+      req.headers.authorization = "Bearer valid-token";
+      verifyAccessToken.mockReturnValue({ id: "user-123" });
+      authService.getAuthUserWithTenant.mockResolvedValue({
+        id: "user-123",
+        tenantId: "tenant-123",
+        isActive: true,
+        status: "SUSPENDED",
+      });
+
+      await optionalAuth(req, res, next);
+
+      // optionalAuth never rejects — it just proceeds anonymously.
+      expect(req.user).toBeNull();
+      expect(req.tenantId).toBeNull();
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should not attach an inactive user", async () => {
+      req.headers.authorization = "Bearer valid-token";
+      verifyAccessToken.mockReturnValue({ id: "user-123" });
+      authService.getAuthUserWithTenant.mockResolvedValue({
+        id: "user-123",
+        tenantId: "tenant-123",
+        isActive: false,
+        status: "ACTIVE",
+      });
+
+      await optionalAuth(req, res, next);
+
+      expect(req.user).toBeNull();
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should not attach a user when the lookup returns nothing", async () => {
+      req.headers.authorization = "Bearer valid-token";
+      verifyAccessToken.mockReturnValue({ id: "user-123" });
+      authService.getAuthUserWithTenant.mockResolvedValue(null);
+
+      await optionalAuth(req, res, next);
+
+      expect(req.user).toBeNull();
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should attach a tenant-less user without setting req.tenantId", async () => {
+      req.headers.authorization = "Bearer valid-token";
+      verifyAccessToken.mockReturnValue({ id: "user-123" });
+      authService.getAuthUserWithTenant.mockResolvedValue({
+        id: "user-123",
+        tenantId: null,
+        isActive: true,
+        status: "ACTIVE",
+      });
+
+      await optionalAuth(req, res, next);
+
+      expect(req.user).toEqual(expect.objectContaining({ id: "user-123" }));
+      expect(req.tenantId).toBeNull();
+      expect(next).toHaveBeenCalled();
     });
   });
 

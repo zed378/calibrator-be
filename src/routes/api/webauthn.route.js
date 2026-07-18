@@ -14,6 +14,40 @@ router.use(auth);
 
 /**
  * @swagger
+ * /api/v1/webauthn/status:
+ *   get:
+ *     summary: Get WebAuthn enrolment status
+ *     description: Returns whether the current user has a passkey enrolled.
+ *     tags: [WebAuthn]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: WebAuthn status
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     enabled:
+ *                       type: boolean
+ *                     signCount:
+ *                       type: integer
+ *                     lastUpdatedAt:
+ *                       type: string
+ *                       format: date-time
+ *                       nullable: true
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: User not found
+ */
+router.get("/status", webauthnController.getStatus);
+/**
+ * @swagger
  * /api/v1/webauthn/registration-options:
  *   post:
  *     summary: Get WebAuthn registration options

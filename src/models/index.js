@@ -233,6 +233,7 @@ module.exports = Object.assign(db, {
   Vendor: models.Vendor,
   MaintenanceWorkOrder: models.MaintenanceWorkOrder,
   Notification: models.Notification,
+  NotificationState: models.NotificationState,
   Subscription: models.Subscription,
   Invoice: models.Invoice,
   AuditLog: models.AuditLog,
@@ -247,6 +248,19 @@ module.exports = Object.assign(db, {
   Post: models.Post,
   Category: models.Category,
   PostCategory: models.PostCategory,
+
+  // Kanban. The loader registers every model file into `models`, but only the
+  // keys listed here are re-exported — an unexported model reads back as
+  // undefined at require time.
+  KanbanProject: models.KanbanProject,
+  KanbanProjectMember: models.KanbanProjectMember,
+  KanbanColumn: models.KanbanColumn,
+  KanbanCard: models.KanbanCard,
+  KanbanLabel: models.KanbanLabel,
+  KanbanCardAssignee: models.KanbanCardAssignee,
+  KanbanCardLabel: models.KanbanCardLabel,
+  KanbanSprint: models.KanbanSprint,
+  KanbanCardRelation: models.KanbanCardRelation,
 
   // Plural (backward compatibility)
   Tenants: models.Tenant,
@@ -306,4 +320,23 @@ module.exports = Object.assign(db, {
   UsageAlerts: models.UsageAlert,
   PlanQuota: models.PlanQuota,
   PlanQuotas: models.PlanQuota,
+
+  // The loader registers every model file into `models`, but only the keys
+  // listed here are re-exported. These six were loaded and associated yet
+  // never exported, so `require("../models").NonConformance` (and friends)
+  // was undefined and every read threw
+  // "Cannot read properties of undefined (reading 'findAndCountAll')" —
+  // breaking GET /qms/nc, /qms/capa, /sop, /jobs and /risk at runtime.
+  NonConformance: models.NonConformance,
+  NonConformances: models.NonConformance,
+  Capa: models.Capa,
+  Capas: models.Capa,
+  SopDocument: models.SopDocument,
+  SopDocuments: models.SopDocument,
+  SopTrainingAcknowledgment: models.SopTrainingAcknowledgment,
+  SopTrainingAcknowledgments: models.SopTrainingAcknowledgment,
+  BatchJob: models.BatchJob,
+  BatchJobs: models.BatchJob,
+  Risk: models.Risk,
+  Risks: models.Risk,
 });

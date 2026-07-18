@@ -210,11 +210,16 @@ exports.deleteUser = async (tenantId, userId) => {
   return { status: 204 };
 };
 
+// SCIM Groups map onto Roles. Roles are GLOBAL in this schema — the model has
+// no tenantId column — so a Role query must never be filtered by it (doing so
+// threw `column Role.tenantId does not exist` and 500'd every Group endpoint).
+// Tenant scoping applies to membership instead: the Users lookups below are
+// always constrained by tenantId.
 exports.getGroups = async (tenantId, startIndex = 1, count = 100, filter = null) => {
   const offset = Math.max(0, startIndex - 1);
   const limit = Math.max(1, count);
 
-  const roleWhere = { tenantId };
+  const roleWhere = {};
   if (filter) {
     const displayNameMatch = filter.match(/displayName eq "([^"]+)"/);
     if (displayNameMatch) {
@@ -248,7 +253,7 @@ exports.getGroups = async (tenantId, startIndex = 1, count = 100, filter = null)
 };
 
 exports.getGroupById = async (tenantId, groupId) => {
-  const role = await Role.findOne({ where: { id: groupId, tenantId } });
+  const role = await Role.findOne({ where: { id: groupId } });
   if (!role) {
     throw new AppError(404, "Group not found");
   }
@@ -268,13 +273,15 @@ exports.createGroup = async (tenantId, scimData) => {
     throw new AppError(400, "displayName is required");
   }
 
-  const existing = await Role.findOne({ where: { name: displayName.toUpperCase(), tenantId } });
+  const existing = await Role.findOne({ where: { name: displayName.toUpperCase() } });
   if (existing) {
     throw new AppError(409, "Group already exists");
   }
 
   const role = await Role.create({
-    tenantId,
+    // No tenantId: roles are global. Sequelize silently drops unknown
+    // attributes, so passing one here was a no-op that implied isolation
+    // the schema does not provide.
     name: displayName.toUpperCase(),
     description: `SCIM-provisioned group: ${displayName}`,
     nameToShow: displayName,
@@ -304,7 +311,7 @@ exports.createGroup = async (tenantId, scimData) => {
 };
 
 exports.updateGroup = async (tenantId, groupId, scimData) => {
-  const role = await Role.findOne({ where: { id: groupId, tenantId } });
+  const role = await Role.findOne({ where: { id: groupId } });
   if (!role) {
     throw new AppError(404, "Group not found");
   }
@@ -336,7 +343,7 @@ exports.updateGroup = async (tenantId, groupId, scimData) => {
 };
 
 exports.patchGroup = async (tenantId, groupId, patchOps) => {
-  const role = await Role.findOne({ where: { id: groupId, tenantId } });
+  const role = await Role.findOne({ where: { id: groupId } });
   if (!role) {
     throw new AppError(404, "Group not found");
   }
@@ -368,7 +375,7 @@ exports.patchGroup = async (tenantId, groupId, patchOps) => {
 };
 
 exports.deleteGroup = async (tenantId, groupId) => {
-  const role = await Role.findOne({ where: { id: groupId, tenantId } });
+  const role = await Role.findOne({ where: { id: groupId } });
   if (!role) {
     throw new AppError(404, "Group not found");
   }

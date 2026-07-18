@@ -38,6 +38,28 @@ const mapSlugToPath = (slug) => {
   return `/dashboard/${slug}`;
 };
 
+// Formats one descendant node (sub-group or leaf item) into the frontend item
+// shape. Recurses so a sub-group carries its own `items` (3-level menus).
+const formatMenuItem = (node, isAssignedMap) => {
+  const item = {
+    id: node.id,
+    label: node.name,
+    icon: node.icon,
+    path: mapSlugToPath(node.slug),
+    requiredPermission: undefined,
+    isAssigned: isAssignedMap ? !!isAssignedMap[node.id] : undefined,
+    sortOrder: node.sortOrder,
+  };
+
+  if (node.children && node.children.length > 0) {
+    item.items = node.children
+      .map((child) => formatMenuItem(child, isAssignedMap))
+      .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+  }
+
+  return item;
+};
+
 // Formats a MenuGroup Sequelize instance (with children) into the frontend shape.
 const formatMenuGroup = (group, isAssignedMap = null) => {
   const formatted = {
@@ -51,15 +73,7 @@ const formatMenuGroup = (group, isAssignedMap = null) => {
 
   if (group.children && group.children.length > 0) {
     formatted.items = group.children
-      .map((child) => ({
-        id: child.id,
-        label: child.name,
-        icon: child.icon,
-        path: mapSlugToPath(child.slug),
-        requiredPermission: undefined,
-        isAssigned: isAssignedMap ? !!isAssignedMap[child.id] : undefined,
-        sortOrder: child.sortOrder,
-      }))
+      .map((child) => formatMenuItem(child, isAssignedMap))
       .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
   } else {
     formatted.items = [];
@@ -68,21 +82,36 @@ const formatMenuGroup = (group, isAssignedMap = null) => {
   return formatted;
 };
 
-// Fetches all active top-level groups with their active children, ordered.
+// Active-children include, reused at each nesting level.
+const activeChildrenInclude = (nested) => {
+  const include = {
+    model: MenuGroup,
+    as: "children",
+    where: { isActive: true },
+    required: false,
+  };
+  if (nested) {
+    include.include = [nested];
+  }
+  return include;
+};
+
+// Fetches all active top-level groups with their active children AND
+// grandchildren (Management → sub-group category → item), ordered by sortOrder
+// at every level.
 const fetchActiveParentGroups = () =>
   MenuGroup.findAll({
     where: { parentId: null, isActive: true },
-    include: [
-      {
-        model: MenuGroup,
-        as: "children",
-        where: { isActive: true },
-        required: false,
-      },
-    ],
+    include: [activeChildrenInclude(activeChildrenInclude())],
     order: [
       ["sortOrder", "ASC"],
       [{ model: MenuGroup, as: "children" }, "sortOrder", "ASC"],
+      [
+        { model: MenuGroup, as: "children" },
+        { model: MenuGroup, as: "children" },
+        "sortOrder",
+        "ASC",
+      ],
     ],
   });
 
@@ -112,35 +141,54 @@ exports.getRoleMenuAssignments = async (roleId) => {
 
   const parentGroups = await fetchActiveParentGroups();
 
+  // Walks a node at any depth. A node is visible when it is explicitly
+  // assigned, when one of its ancestors is assigned (assignment cascades down),
+  // or when at least one descendant survives the same test — so an explicitly
+  // assigned leaf still surfaces through an unassigned sub-group, while a
+  // sub-group that ends up empty and unassigned is dropped entirely.
+  const buildNode = (node, ancestorAssigned) => {
+    const isAssigned = ancestorAssigned || assignedIds.has(node.id);
+
+    const visibleChildren = (node.children || [])
+      .map((child) => buildNode(child, isAssigned))
+      .filter(Boolean);
+
+    if (!isAssigned && visibleChildren.length === 0) {
+      return null;
+    }
+
+    const built = {
+      id: node.id,
+      label: node.name,
+      icon: node.icon,
+      path: mapSlugToPath(node.slug),
+      requiredPermission: undefined,
+    };
+
+    // Only sub-groups carry an `items` array; leaves keep the flat item shape
+    // the frontend has always received.
+    if (visibleChildren.length > 0) {
+      built.items = visibleChildren;
+    }
+
+    return built;
+  };
+
   const result = [];
   for (const group of parentGroups) {
-    const isParentAssigned = assignedIds.has(group.id);
-
-    // If parent is assigned, include all children. Otherwise, include only
-    // explicitly assigned children.
-    const assignedChildren = (group.children || []).filter(
-      (child) => isParentAssigned || assignedIds.has(child.id),
-    );
-
-    if (isParentAssigned || assignedChildren.length > 0) {
-      const formatted = {
-        id: group.id,
-        label: group.name,
-        icon: group.icon,
-        path: mapSlugToPath(group.slug),
-        sortOrder: group.sortOrder,
-      };
-
-      formatted.items = assignedChildren.map((child) => ({
-        id: child.id,
-        label: child.name,
-        icon: child.icon,
-        path: mapSlugToPath(child.slug),
-        requiredPermission: undefined,
-      }));
-
-      result.push(formatted);
+    const built = buildNode(group, false);
+    if (!built) {
+      continue;
     }
+
+    result.push({
+      id: group.id,
+      label: group.name,
+      icon: group.icon,
+      path: mapSlugToPath(group.slug),
+      sortOrder: group.sortOrder,
+      items: built.items || [],
+    });
   }
 
   return result;

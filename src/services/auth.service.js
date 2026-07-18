@@ -121,9 +121,12 @@ exports.registerUser = async (input, origin) => {
     const activationToken = generateAccessToken({ id: user.id });
     const activationLink = baseOrigin + "/activation?token=" + activationToken;
 
-    // Queue activation email (async, non-blocking)
+    // Queue activation email (async, non-blocking).
+    // queueActivationEmail takes ONE destructured object — it was being called
+    // as (email, {...}), so every field was destructured off the email STRING
+    // and arrived undefined, sending activation mail with no recipient/link.
     try {
-      queueActivationEmail(email, { firstName, lastName, activationLink });
+      queueActivationEmail({ email, firstName, lastName, activationLink });
     } catch (e) {
       logger.warn("queueActivationEmail failed", { err: e.message });
     }
@@ -328,8 +331,13 @@ exports.requestOTP = async (input) => {
     otpLastRequestedAt: new Date(),
   });
 
+  // queueOtpEmail takes ONE destructured object — it was being called as
+  // (email, {...}), so email/otp were destructured off the email STRING and
+  // arrived undefined: password-reset mail went out with no recipient and no
+  // code.
   try {
-    queueOtpEmail(email, {
+    queueOtpEmail({
+      email,
       firstName: user.firstName,
       lastName: user.lastName,
       otp: otpCode,
@@ -345,7 +353,15 @@ exports.requestOTP = async (input) => {
 // PROCESS RESET PASSWORD
 // ------------------------------------------------------------------
 exports.processResetPassword = async (input) => {
-  const { email, otp, newPassword } = validate(input, resetPasswordSchema);
+  // The schema field is `password` (see resetPasswordSchema); this used to
+  // destructure `newPassword`, which is never present after Joi's
+  // stripUnknown. Validation still passed, so the reset ran with
+  // hashPassword(undefined) and silently replaced the user's password with a
+  // hash of `undefined` — locking them out of their account.
+  const { email, otp, password: newPassword } = validate(
+    input,
+    resetPasswordSchema,
+  );
 
   const user = await Users.findOne({ where: { email } });
   if (!user) {
@@ -442,7 +458,7 @@ exports.getAuthUserWithTenant = async (userId) => {
 // ------------------------------------------------------------------
 // JUST UPDATE PASSWORD
 // ------------------------------------------------------------------
-exports.justUpdatePassword = async (userId, newPassword) => {
+exports.justUpdatePassword = async (userId, newPassword, currentPassword) => {
   if (!newPassword || newPassword.length < PASSWORD_MIN_LENGTH) {
     throw new AppError(
       400,
@@ -452,6 +468,16 @@ exports.justUpdatePassword = async (userId, newPassword) => {
   const user = await Users.findByPk(userId);
   if (!user) {
     throw new AppError(404, "User not found");
+  }
+  // Re-authenticate: holding a valid session must NEVER be enough to change a
+  // password. Without this, a stolen/hijacked token allows account takeover,
+  // and any client-side "current password" check is trivially bypassed.
+  if (!currentPassword) {
+    throw new AppError(400, "Current password is required");
+  }
+  const currentMatches = await comparePassword(currentPassword, user.password);
+  if (!currentMatches) {
+    throw new AppError(400, "Current password is incorrect");
   }
   await user.update({
     password: await hashPassword(newPassword),
@@ -475,10 +501,13 @@ exports.passIsValid = async (userId, password) => {
     throw new AppError(404, "User not found");
   }
   const match = await comparePassword(password, user.password);
+  // 200 with `data.valid` is intentional (this is a check endpoint), but the
+  // message must reflect the result — callers that only read the message or
+  // the success flag were treating a wrong password as valid.
   return {
     success: true,
     status: 200,
-    message: "Password is valid",
+    message: match ? "Password is valid" : "Password is incorrect",
     data: { valid: match },
   };
 };
@@ -563,8 +592,13 @@ exports.refreshUserToken = async (
 // LOGOUT ALL SESSIONS
 // ------------------------------------------------------------------
 exports.logoutAllUserSessions = async (userId) => {
+  // NOTE: this used to also call `del(cacheKeys.userSessions(userId))`.
+  // `cacheKeys` has no `userSessions` member (see redis.service.js), so that
+  // threw "cacheKeys.userSessions is not a function" on every call — logging
+  // out of all sessions always failed. Nothing caches a per-user session list
+  // either (this was its only reference), so the call was dead as well as
+  // broken. revokeAllSessions is the operation that actually matters.
   await revokeAllSessions(userId, "USER_REQUESTED");
-  await del(cacheKeys.userSessions(userId));
   return {
     success: true,
     status: 200,

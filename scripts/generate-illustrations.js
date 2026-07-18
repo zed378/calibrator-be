@@ -45,8 +45,14 @@ graph TB
         CalibrationService["Calibration Service"]
         StockService["Stock Service"]
         WarehouseService["Warehouse Service"]
+        KanbanService["Kanban Service"]
+        NotificationService["Notification Service"]
         EmailService["Email Service"]
         BackupService["Backup Service"]
+    end
+
+    subgraph Realtime["Realtime Layer"]
+        SocketIO["Socket.IO Gateway"]
     end
 
     subgraph External["External Services"]
@@ -73,6 +79,7 @@ graph TB
     Controllers --> CalibrationService
     Controllers --> StockService
     Controllers --> WarehouseService
+    Controllers --> KanbanService
     AuthService --> Redis
     AuthService --> RabbitMQ
     EmailService --> RabbitMQ
@@ -84,6 +91,12 @@ graph TB
     CalibrationService --> PostgreSQL
     StockService --> PostgreSQL
     WarehouseService --> PostgreSQL
+    KanbanService --> PostgreSQL
+    KanbanService --> NotificationService
+    KanbanService --> SocketIO
+    NotificationService --> SocketIO
+    NotificationService --> PostgreSQL
+    SocketIO --> Web
     BackupService --> PostgreSQL
     Middleware --> Redis
     `,
@@ -377,6 +390,70 @@ erDiagram
         string status
         string filePath
     }
+
+    TENANTS ||--o{ KANBAN_PROJECTS : has
+    KANBAN_PROJECTS ||--o{ KANBAN_PROJECT_MEMBERS : grants
+    KANBAN_PROJECTS ||--o{ KANBAN_COLUMNS : has
+    KANBAN_PROJECTS ||--o{ KANBAN_SPRINTS : has
+    KANBAN_PROJECTS ||--o{ KANBAN_CARDS : contains
+    KANBAN_PROJECTS ||--o{ KANBAN_LABELS : defines
+    KANBAN_PROJECTS {
+        uuid id PK
+        uuid tenantId FK
+        string name
+        string code
+        int cardSeq
+    }
+    KANBAN_PROJECT_MEMBERS }o--|| KANBAN_PROJECTS : belongs
+    KANBAN_PROJECT_MEMBERS {
+        uuid id PK
+        uuid projectId FK
+        uuid userId FK
+        uuid roleId FK
+        string accessLevel
+    }
+    KANBAN_COLUMNS ||--o{ KANBAN_CARDS : holds
+    KANBAN_COLUMNS {
+        uuid id PK
+        uuid projectId FK
+        string name
+        int position
+        boolean isDone
+    }
+    KANBAN_SPRINTS ||--o{ KANBAN_CARDS : scopes
+    KANBAN_SPRINTS {
+        uuid id PK
+        uuid projectId FK
+        string name
+        string status
+    }
+    KANBAN_CARDS ||--o{ KANBAN_CARD_ASSIGNEES : tagged
+    KANBAN_CARDS ||--o{ KANBAN_CARD_LABELS : labeled
+    KANBAN_CARDS ||--o{ KANBAN_CARD_RELATIONS : links
+    KANBAN_CARDS {
+        uuid id PK
+        uuid projectId FK
+        uuid columnId FK
+        uuid sprintId FK
+        int number
+        string cardKey
+        string title
+        string priority
+    }
+    KANBAN_LABELS ||--o{ KANBAN_CARD_LABELS : applied
+    KANBAN_LABELS {
+        uuid id PK
+        uuid projectId FK
+        string name
+        string color
+    }
+    KANBAN_CARD_RELATIONS }o--|| KANBAN_CARDS : from
+    KANBAN_CARD_RELATIONS {
+        uuid id PK
+        uuid sourceCardId FK
+        uuid targetCardId FK
+        string type
+    }
     `
       .trim()
       .replace(/\n\s+/g, "\n"),
@@ -494,6 +571,18 @@ graph TB
         W4["POST /api/v1/warehouse/location/create"]
     end
 
+    subgraph Kanban["Kanban Module"]
+        KB1["GET /api/v1/kanban/projects"]
+        KB2["POST /api/v1/kanban/projects"]
+        KB3["GET /api/v1/kanban/projects/:id?sprintId"]
+        KB4["GET /api/v1/kanban/projects/:id/metrics"]
+        KB5["POST /api/v1/kanban/projects/:id/cards"]
+        KB6["PATCH /api/v1/kanban/projects/:id/cards/:cid/move"]
+        KB7["POST /api/v1/kanban/projects/:id/cards/:cid/relations"]
+        KB8["POST /api/v1/kanban/projects/:id/sprints/migrate"]
+        KB9["POST /api/v1/kanban/projects/:id/columns/reorder"]
+    end
+
     style Auth fill:#e3f2fd
     style Users fill:#e3f2fd
     style Roles fill:#e3f2fd
@@ -503,6 +592,7 @@ graph TB
     style Calibration fill:#f3e5f5
     style Stock fill:#fff3e0
     style Warehouse fill:#fff3e0
+    style Kanban fill:#e8f5e9
     `
       .trim()
       .replace(/\n\s+/g, "\n"),
@@ -1224,6 +1314,140 @@ stateDiagram-v2
     SIGNED_LOCKED --> REVOKED : Revoke / Device Out-of-Service
     APPROVED --> REVOKED : Revoke
     REVOKED --> [*]
+    `
+      .trim()
+      .replace(/\n\s+/g, "\n"),
+  },
+  {
+    id: "29-calibration-scheduler",
+    title: "Calibration Scheduler",
+    mermaid: `
+sequenceDiagram
+    participant Cron as Scheduler (cron)
+    participant SVC as Scheduler Service
+    participant DB as PostgreSQL
+    participant N as Notification Service
+    participant U as Assigned User
+
+    Note over Cron,DB: Recurring calibration due-date sweep
+    Cron->>SVC: runDueScan()
+    SVC->>DB: Find devices with nextCalibrationDate <= window
+    SVC->>DB: Upsert calibration schedule entries
+    loop For each due/overdue device
+        SVC->>N: emitNotification(CALIBRATION, due)
+        N->>U: Realtime + persisted alert
+    end
+    SVC->>DB: Mark schedule status (planned/overdue/done)
+    SVC-->>Cron: summary { scanned, due, overdue }
+    `
+      .trim()
+      .replace(/\n\s+/g, "\n"),
+  },
+  {
+    id: "32-kanban-architecture",
+    title: "Kanban Project Tracker Architecture",
+    mermaid: `
+graph TB
+    subgraph Client["Frontend (Next.js)"]
+        BoardUI["Board UI (drag & drop)"]
+        DashUI["KPI Analytics Dashboard"]
+        SocketC["Socket.IO client"]
+    end
+
+    subgraph API["Kanban API (/api/v1/kanban)"]
+        Routes["kanban.route.js"]
+        Ctrl["kanban.controller.js"]
+        Valid["kanban.validator.js (Joi)"]
+    end
+
+    subgraph Svc["kanban.service.js"]
+        Access["resolveAccess / assertAccess"]
+        CardLogic["Cards + card keys (card_seq)"]
+        SprintLogic["Sprints + migrate"]
+        ColLogic["Columns (persistent Done)"]
+        RelLogic["Relations (both directions)"]
+        Metrics["getMetrics (KPIs)"]
+    end
+
+    subgraph Realtime["Realtime + Notify"]
+        Socket["Socket.IO room board_<projectId>"]
+        Notify["notification.service"]
+    end
+
+    subgraph Store["Data Layer"]
+        PG[(PostgreSQL + RLS)]
+        Att["Attachment Service (card images)"]
+    end
+
+    subgraph Tables["Kanban Tables"]
+        T1["kanban_projects"]
+        T2["kanban_project_members"]
+        T3["kanban_columns"]
+        T4["kanban_cards"]
+        T5["kanban_sprints"]
+        T6["kanban_labels"]
+        T7["kanban_card_assignees"]
+        T8["kanban_card_labels"]
+        T9["kanban_card_relations"]
+    end
+
+    BoardUI --> Routes
+    DashUI --> Routes
+    SocketC -. subscribe .-> Socket
+    Routes --> Valid --> Ctrl --> Access
+    Ctrl --> CardLogic
+    Ctrl --> SprintLogic
+    Ctrl --> ColLogic
+    Ctrl --> RelLogic
+    Ctrl --> Metrics
+    CardLogic --> Notify
+    CardLogic --> Socket
+    SprintLogic --> Socket
+    ColLogic --> Socket
+    RelLogic --> Socket
+    CardLogic --> Att
+    Access --> PG
+    CardLogic --> PG
+    SprintLogic --> PG
+    ColLogic --> PG
+    RelLogic --> PG
+    Metrics --> PG
+    PG --- Tables
+    Notify --> Socket
+    Socket -. emit .-> SocketC
+
+    style Client fill:#e3f2fd
+    style API fill:#e8f5e9
+    style Svc fill:#fff3e0
+    style Realtime fill:#f3e5f5
+    style Tables fill:#eceff1
+    `
+      .trim()
+      .replace(/\n\s+/g, "\n"),
+  },
+  {
+    id: "33-kanban-card-lifecycle",
+    title: "Kanban Card Lifecycle",
+    mermaid: `
+stateDiagram-v2
+    [*] --> Created : POST /cards (auto card-key MGT-N, active sprint)
+    Created --> Assigned : assign / tag users -> notify
+    Assigned --> InProgress : move to In Progress column
+    Created --> InProgress : move
+    InProgress --> Linked : add relation (parent/child, blocks, relates)
+    Linked --> InProgress
+    InProgress --> Migrated : migrate to next sprint
+    Migrated --> InProgress
+    InProgress --> Done : move to Done column (persistent, last)
+    Done --> InProgress : reopen (move back)
+    Done --> Archived : delete (soft, key never recycled)
+    Archived --> [*]
+
+    note right of Created
+        Every transition emits a Socket.IO
+        event to board_<projectId> and
+        notifies assignees (SYSTEM).
+    end note
     `
       .trim()
       .replace(/\n\s+/g, "\n"),

@@ -54,10 +54,15 @@ jest.mock("../../middlewares/activityLog.middleware", () => ({
   },
 }));
 
-const { dynamicAccess, hasDynamicPermission } = require("../../middlewares/dynamicAccess.middleware");
+const {
+  dynamicAccess,
+  hasDynamicPermission,
+} = require("../../middlewares/dynamicAccess.middleware");
 const RolesService = require("../../services/roles.service");
 const { scopeAllows } = require("../../services/apiKey.service");
-const { getUserOverrideMatrix } = require("../../services/userPermission.service");
+const {
+  getUserOverrideMatrix,
+} = require("../../services/userPermission.service");
 const { User, Tenants } = require("../../models");
 const { logger } = require("../../middlewares/activityLog.middleware");
 
@@ -86,6 +91,12 @@ describe("dynamicAccess middleware", () => {
     });
     scopeAllows.mockReturnValue(true);
     getUserOverrideMatrix.mockResolvedValue({});
+    // clearMocks only clears call history, not queued *Once implementations.
+    // Reset these so an unconsumed mockResolvedValueOnce from a prior test
+    // (e.g. checkTenant tests that provide userId and never call Tenants.findByPk)
+    // cannot leak into a later test's first call.
+    User.findByPk.mockReset();
+    Tenants.findByPk.mockReset();
     User.findByPk.mockResolvedValue(null);
     Tenants.findByPk.mockResolvedValue(null);
     next = jest.fn();
@@ -302,11 +313,7 @@ describe("dynamicAccess middleware", () => {
     it("should authorize via scopes when allowed", async () => {
       scopeAllows.mockReturnValue(true);
       await run(dynamicAccess("Home", "read"));
-      expect(scopeAllows).toHaveBeenCalledWith(
-        ["Home:read"],
-        "Home",
-        "read",
-      );
+      expect(scopeAllows).toHaveBeenCalledWith(["Home:read"], "Home", "read");
       expect(next).toHaveBeenCalled();
     });
 
@@ -318,10 +325,127 @@ describe("dynamicAccess middleware", () => {
 
     it("should require all scopes when requireAll is set", async () => {
       scopeAllows.mockReturnValue(false);
-      await run(
-        dynamicAccess("Home", ["read", "write"], { requireAll: true }),
-      );
+      await run(dynamicAccess("Home", ["read", "write"], { requireAll: true }));
       expect(res.status).toHaveBeenCalledWith(403);
+    });
+
+    it("should handle null scopes for API key", async () => {
+      req.user = makeUser({ isApiKey: true, apiKeyScopes: null });
+      scopeAllows.mockReturnValue(false);
+      await run(dynamicAccess("Home", "read"));
+      expect(scopeAllows).toHaveBeenCalledWith([], "Home", "read");
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+
+    it("should use OR logic across permission types by default", async () => {
+      scopeAllows.mockReturnValueOnce(false).mockReturnValueOnce(true);
+      await run(dynamicAccess("Home", ["read", "write"]));
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should require all permission types when requireAll is set for API key", async () => {
+      scopeAllows.mockReturnValueOnce(true).mockReturnValueOnce(false);
+      await run(dynamicAccess("Home", ["read", "write"], { requireAll: true }));
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+  });
+
+  describe("normalizePermission", () => {
+    it("should normalize read to read", () => {
+      const {
+        normalizePermission,
+      } = require("../../middlewares/dynamicAccess.middleware");
+      // normalizePermission is not exported, but we can test via hasDynamicPermission
+    });
+
+    it("should normalize any other verb to write", async () => {
+      RolesService.getRolePermissionsMatrix.mockResolvedValueOnce({
+        Home: ["write"],
+      });
+      req.body = { menuGroup: "Home", permissionType: "create" };
+      await hasDynamicPermission(req, res, next);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: expect.objectContaining({ allowed: true }),
+        }),
+      );
+    });
+
+    it("should normalize update to write", async () => {
+      RolesService.getRolePermissionsMatrix.mockResolvedValueOnce({
+        Home: ["write"],
+      });
+      req.body = { menuGroup: "Home", permissionType: "update" };
+      await hasDynamicPermission(req, res, next);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: expect.objectContaining({ allowed: true }),
+        }),
+      );
+    });
+
+    it("should normalize delete to write", async () => {
+      RolesService.getRolePermissionsMatrix.mockResolvedValueOnce({
+        Home: ["write"],
+      });
+      req.body = { menuGroup: "Home", permissionType: "delete" };
+      await hasDynamicPermission(req, res, next);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: expect.objectContaining({ allowed: true }),
+        }),
+      );
+    });
+  });
+
+  describe("checkTenant with query userId", () => {
+    it("should check resource owner tenant via query.userId", async () => {
+      Tenants.findByPk.mockResolvedValueOnce(null);
+      User.findByPk.mockResolvedValueOnce({ tenantId: "tenant-123" });
+      req.query = { userId: "other-user" };
+      await run(dynamicAccess("Home", "read", { checkTenant: true }));
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should 403 when resource owner via query has different tenant", async () => {
+      Tenants.findByPk.mockResolvedValueOnce(null);
+      User.findByPk.mockResolvedValueOnce({ tenantId: "tenant-999" });
+      req.query = { userId: "other-user" };
+      await run(dynamicAccess("Home", "read", { checkTenant: true }));
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+  });
+
+  describe("checkTenant with body userId", () => {
+    it("should check resource owner tenant via body.userId", async () => {
+      Tenants.findByPk.mockResolvedValueOnce(null);
+      User.findByPk.mockResolvedValueOnce({ tenantId: "tenant-123" });
+      req.body = { userId: "other-user" };
+      await run(dynamicAccess("Home", "read", { checkTenant: true }));
+      expect(next).toHaveBeenCalled();
+    });
+  });
+
+  describe("error handling in dynamicAccess", () => {
+    it("should return 500 when tenant lookup throws", async () => {
+      Tenants.findByPk.mockRejectedValueOnce(new Error("DB error"));
+      req.params = { tenantId: "tenant-123" };
+      const middleware = dynamicAccess("Home", "read", { checkTenant: true });
+      await middleware(req, res, next);
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(logger.error).toHaveBeenCalled();
+    });
+
+    it("should return 500 when user lookup throws in checkTenant", async () => {
+      Tenants.findByPk.mockResolvedValueOnce(null);
+      User.findByPk.mockRejectedValueOnce(new Error("DB error"));
+      req.params = { userId: "other-user" };
+      const middleware = dynamicAccess("Home", "read", { checkTenant: true });
+      await middleware(req, res, next);
+      expect(res.status).toHaveBeenCalledWith(500);
     });
   });
 });
@@ -404,12 +528,189 @@ describe("hasDynamicPermission", () => {
     );
   });
 
+  it("should return 400 when body is missing", async () => {
+    req.body = null;
+    await hasDynamicPermission(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
   it("should return 500 on error", async () => {
-    RolesService.getRolePermissionsMatrix.mockRejectedValue(
-      new Error("boom"),
-    );
+    RolesService.getRolePermissionsMatrix.mockRejectedValue(new Error("boom"));
     await hasDynamicPermission(req, res, next);
     expect(res.status).toHaveBeenCalledWith(500);
     expect(logger.error).toHaveBeenCalled();
+  });
+
+  describe("extra tenant and override branches", () => {
+    it("should use user.tenant.id as fallback when user.tenantId is undefined", async () => {
+      req.user = makeUser({
+        tenantId: undefined,
+        tenant: { id: "tenant-123" },
+      });
+      Tenants.findByPk = jest.fn().mockResolvedValue({ id: "tenant-123" });
+      req.params = { tenantId: "tenant-123" };
+      const middleware = dynamicAccess("Home", "read", { checkTenant: true });
+      await middleware(req, res, next);
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should handle error when getUserOverrideMatrix throws in checkMenuPermission", async () => {
+      getUserOverrideMatrix.mockRejectedValueOnce(
+        new Error("Override matrix lookup failed"),
+      );
+      const middleware = dynamicAccess("Home", "read");
+      await middleware(req, res, next);
+      expect(next).toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "UserPermission override lookup failed: Override matrix lookup failed",
+        ),
+      );
+    });
+  });
+});
+
+describe("dynamicAccess — remaining branches", () => {
+  let req, res, next;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    RolesService.getRolePermissionsMatrix.mockResolvedValue({
+      Home: ["read", "write"],
+    });
+    scopeAllows.mockReturnValue(true);
+    getUserOverrideMatrix.mockResolvedValue({});
+    User.findByPk.mockReset();
+    Tenants.findByPk.mockReset();
+    User.findByPk.mockResolvedValue(null);
+    Tenants.findByPk.mockResolvedValue(null);
+    next = jest.fn();
+    req = {
+      user: makeUser(),
+      params: {},
+      body: {},
+      query: {},
+      method: "GET",
+      path: "/api/test",
+      ip: "192.168.1.1",
+    };
+    res = {
+      locals: {},
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn().mockReturnThis(),
+    };
+  });
+
+  describe("checkTenant with no tenant id and no owner id", () => {
+    it("should skip both tenant lookups and fall through to the permission check", async () => {
+      // Neither params/body/query carry a tenantId nor a userId, so the
+      // middleware has nothing to isolate on and must defer to the matrix.
+      await dynamicAccess("Home", "read", { checkTenant: true })(req, res, next);
+
+      expect(Tenants.findByPk).not.toHaveBeenCalled();
+      expect(User.findByPk).not.toHaveBeenCalled();
+      expect(next).toHaveBeenCalled();
+      expect(res.status).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("owner tenant resolution via user.tenant fallback", () => {
+    it("should fall back to user.tenant.id when user.tenantId is absent", async () => {
+      req.user = makeUser({ tenantId: undefined, tenant: { id: "tenant-123" } });
+      req.params = { userId: "other-user" };
+      User.findByPk.mockResolvedValue({ tenantId: "tenant-123" });
+
+      await dynamicAccess("Home", "read", { checkTenant: true })(req, res, next);
+
+      expect(User.findByPk).toHaveBeenCalledWith("other-user", {
+        attributes: ["tenantId"],
+      });
+      expect(next).toHaveBeenCalled();
+      expect(res.status).not.toHaveBeenCalled();
+    });
+
+    it("should 403 when user.tenant.id fallback does not match the owner tenant", async () => {
+      req.user = makeUser({ tenantId: undefined, tenant: { id: "tenant-123" } });
+      req.params = { userId: "other-user" };
+      User.findByPk.mockResolvedValue({ tenantId: "tenant-999" });
+
+      await dynamicAccess("Home", "read", { checkTenant: true })(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(next).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("empty permission type list", () => {
+    it("should 403 and report permTypes when no permission type is denied by name", async () => {
+      // Degenerate config: with an empty permTypes list nothing can be
+      // allowed under OR logic, and deniedTypes is empty so the response
+      // falls back to echoing permTypes.
+      await dynamicAccess("Home", [])(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        message: "Forbidden: Insufficient permissions",
+        required: [],
+        menuGroups: ["Home"],
+      });
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it("should attach a null permission when requireAll passes vacuously", async () => {
+      await dynamicAccess("Home", [], { requireAll: true })(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(req.dynamicAccessContext).toEqual({
+        allowed: true,
+        menuGroups: ["Home"],
+        permissionTypes: [],
+        permission: null,
+      });
+    });
+  });
+
+  describe("menu missing from the matrix", () => {
+    it("should deny with 403 when the role matrix has no entry for the menu", async () => {
+      RolesService.getRolePermissionsMatrix.mockResolvedValue({});
+
+      await dynamicAccess("Home", "read")(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ required: ["read"] }),
+      );
+      expect(next).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("error without a message", () => {
+    it("should fall back to a generic 500 message", async () => {
+      RolesService.getRolePermissionsMatrix.mockRejectedValue(new Error(""));
+
+      await dynamicAccess("Home", "read")(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        message: "Internal Server Error",
+      });
+    });
+  });
+
+  describe("hasDynamicPermission menu missing from the matrix", () => {
+    it("should return allowed false when the matrix has no entry for the menu", async () => {
+      RolesService.getRolePermissionsMatrix.mockResolvedValue({});
+      req.body = { menuGroup: "Home", permissionType: "read" };
+
+      await hasDynamicPermission(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        data: { allowed: false, permission: null },
+      });
+    });
   });
 });

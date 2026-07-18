@@ -186,4 +186,146 @@ describe("SCIM Routes (full coverage)", () => {
       }
     });
   });
+
+  // --------------------------------------------------------------------
+  // The two inline middlewares are not exported, so reach them through the
+  // router stack and actually invoke them. Registration-only assertions left
+  // both functions (and all 11 of their branches) uncovered.
+  // --------------------------------------------------------------------
+
+  /** router.use() layers, in registration order: shim, auth, requireApiKeyOrAdmin. */
+  const useLayers = () => scimRoutes.stack.filter((l) => !l.route);
+  const layerNamed = (name) =>
+    useLayers().find((l) => l.handle && l.handle.name === name)?.handle;
+
+  const JWT_LIKE =
+    "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.sig";
+  const API_KEY_LIKE = "Bearer " + "k".repeat(40);
+
+  describe("scimAuthShim", () => {
+    const shim = () => layerNamed("scimAuthShim");
+
+    it("is registered as a router.use layer", () => {
+      expect(typeof shim()).toBe("function");
+    });
+
+    it("rewrites a long dotless Bearer token to ApiKey", () => {
+      const req = { headers: { authorization: API_KEY_LIKE } };
+      const next = jest.fn();
+
+      shim()(req, {}, next);
+
+      expect(req.headers.authorization).toBe("ApiKey " + "k".repeat(40));
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("leaves a JWT-looking Bearer token alone (contains dots)", () => {
+      const req = { headers: { authorization: JWT_LIKE } };
+      const next = jest.fn();
+
+      shim()(req, {}, next);
+
+      expect(req.headers.authorization).toBe(JWT_LIKE);
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("leaves a short Bearer token alone", () => {
+      const short = "Bearer abc";
+      const req = { headers: { authorization: short } };
+      const next = jest.fn();
+
+      shim()(req, {}, next);
+
+      expect(req.headers.authorization).toBe(short);
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("leaves a non-Bearer scheme alone", () => {
+      const apiKey = "ApiKey " + "k".repeat(40);
+      const req = { headers: { authorization: apiKey } };
+      const next = jest.fn();
+
+      shim()(req, {}, next);
+
+      expect(req.headers.authorization).toBe(apiKey);
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("passes through when there is no authorization header", () => {
+      const req = { headers: {} };
+      const next = jest.fn();
+
+      shim()(req, {}, next);
+
+      expect(req.headers.authorization).toBeUndefined();
+      expect(next).toHaveBeenCalled();
+    });
+  });
+
+  describe("requireApiKeyOrAdmin", () => {
+    const guard = () => layerNamed("requireApiKeyOrAdmin");
+    const makeRes = () => ({
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn().mockReturnThis(),
+    });
+
+    it("is registered as a router.use layer", () => {
+      expect(typeof guard()).toBe("function");
+    });
+
+    it("allows an API key principal", () => {
+      const next = jest.fn();
+      const res = makeRes();
+
+      guard()({ user: { isApiKey: true } }, res, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(res.status).not.toHaveBeenCalled();
+    });
+
+    it.each(["SUPER_ADMIN", "SUPERADMIN"])("allows %s", (roleName) => {
+      const next = jest.fn();
+      const res = makeRes();
+
+      guard()({ user: { role: { name: roleName } } }, res, next);
+
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("rejects an ordinary user with a SCIM-shaped 403", () => {
+      const next = jest.fn();
+      const res = makeRes();
+
+      guard()({ user: { role: { name: "TECHNICIAN" } } }, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          schemas: ["urn:ietf:params:scim:api:messages:2.0:Error"],
+          status: "403",
+        }),
+      );
+    });
+
+    it("rejects when there is no user at all", () => {
+      const next = jest.fn();
+      const res = makeRes();
+
+      guard()({}, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+
+    it("rejects a user with no role", () => {
+      const next = jest.fn();
+      const res = makeRes();
+
+      guard()({ user: {} }, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+  });
 });

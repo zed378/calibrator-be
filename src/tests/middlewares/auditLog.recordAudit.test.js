@@ -96,4 +96,141 @@ describe("recordAudit", () => {
       expect.objectContaining({ resourceId: "res-42", action: "CREATE" }),
     );
   });
+
+  it("uses opts.idParam when provided", async () => {
+    const req = {
+      user: { id: "u", tenantId: "t" },
+      tenantId: "t",
+      params: { customId: "custom-value" },
+      get: () => "a",
+    };
+    const res = makeRes();
+    recordAudit("CREATE", "Role", { idParam: "customId" })(req, res, jest.fn());
+    res._finish();
+    await Promise.resolve();
+    expect(auditService.logAction).toHaveBeenCalledWith(
+      expect.objectContaining({ resourceId: "custom-value", action: "CREATE" }),
+    );
+  });
+
+  it("records a null resourceId when opts.idParam is absent from req.params", async () => {
+    const req = {
+      user: { id: "u", tenantId: "t" },
+      tenantId: "t",
+      params: { somethingElse: "x" },
+      get: () => "a",
+    };
+    const res = makeRes();
+    recordAudit("UPDATE", "Role", { idParam: "missingId" })(req, res, jest.fn());
+    res._finish();
+    await Promise.resolve();
+    expect(auditService.logAction).toHaveBeenCalledWith(
+      expect.objectContaining({ resourceId: null, action: "UPDATE" }),
+    );
+  });
+
+  it("records a null resourceId when req.params has no id", async () => {
+    const req = {
+      user: { id: "u", tenantId: "t" },
+      tenantId: "t",
+      params: {},
+      get: () => "a",
+    };
+    const res = makeRes();
+    recordAudit("DELETE", "Role")(req, res, jest.fn());
+    res._finish();
+    await Promise.resolve();
+    expect(auditService.logAction).toHaveBeenCalledWith(
+      expect.objectContaining({ resourceId: null, action: "DELETE" }),
+    );
+  });
+
+  it("records nulls when the request carries no tenant, user or agent", async () => {
+    // An unauthenticated LOGIN attempt: no req.tenantId, no req.user, and
+    // req.get returns nothing.
+    const req = { params: {}, get: () => undefined };
+    const res = makeRes();
+    recordAudit("LOGIN", "Session")(req, res, jest.fn());
+    res._finish();
+    await Promise.resolve();
+    expect(auditService.logAction).toHaveBeenCalledWith({
+      tenantId: null,
+      userId: null,
+      action: "LOGIN",
+      resourceType: "Session",
+      resourceId: null,
+      ipAddress: null,
+      userAgent: null,
+    });
+  });
+
+  it("falls back to req.user.tenantId when req.tenantId is absent", async () => {
+    const req = {
+      user: { id: "u-2", tenantId: "tenant-from-user" },
+      params: {},
+      get: () => "a",
+    };
+    const res = makeRes();
+    recordAudit("EXPORT", "Report")(req, res, jest.fn());
+    res._finish();
+    await Promise.resolve();
+    expect(auditService.logAction).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: "tenant-from-user", userId: "u-2" }),
+    );
+  });
+
+  it("records a null userId when the user object has no id", async () => {
+    const req = { user: {}, tenantId: "t", params: {}, get: () => "a" };
+    const res = makeRes();
+    recordAudit("APPROVE", "Certificate")(req, res, jest.fn());
+    res._finish();
+    await Promise.resolve();
+    expect(auditService.logAction).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: null, action: "APPROVE" }),
+    );
+  });
+
+  it("swallows a logAction rejection without affecting the response", async () => {
+    const unhandled = jest.fn();
+    process.on("unhandledRejection", unhandled);
+    auditService.logAction.mockRejectedValueOnce(new Error("db down"));
+
+    const req = {
+      user: { id: "u", tenantId: "t" },
+      tenantId: "t",
+      params: { id: "r-1" },
+      get: () => "a",
+    };
+    const res = makeRes();
+    const next = jest.fn();
+    recordAudit("CREATE", "Role")(req, res, next);
+    expect(next).toHaveBeenCalled();
+
+    // Must not throw out of the 'finish' handler.
+    expect(() => res._finish()).not.toThrow();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(auditService.logAction).toHaveBeenCalledTimes(1);
+    expect(unhandled).not.toHaveBeenCalled();
+    process.off("unhandledRejection", unhandled);
+  });
+
+  it("sets resourceId to null if resolver throws an error", async () => {
+    const req = {
+      user: { id: "u", tenantId: "t" },
+      tenantId: "t",
+      get: () => "a",
+    };
+    const res = makeRes();
+    const badResolver = () => {
+      throw new Error("Resolver failed");
+    };
+    recordAudit("CREATE", "Role", { resolveResourceId: badResolver })(req, res, jest.fn());
+    res._finish();
+    await Promise.resolve();
+    expect(auditService.logAction).toHaveBeenCalledWith(
+      expect.objectContaining({ resourceId: null, action: "CREATE" }),
+    );
+  });
 });

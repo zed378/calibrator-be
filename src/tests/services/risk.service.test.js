@@ -113,6 +113,19 @@ describe("riskService", () => {
       });
     });
 
+    it("should apply limit/page defaults for an empty query", async () => {
+      Risk.findAndCountAll.mockResolvedValueOnce({ count: 0, rows: [] });
+
+      const result = await riskService.getRisks("tenant-1", {});
+
+      // limit = 10, page = 1 come from destructuring defaults.
+      expect(Risk.findAndCountAll).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: 10, offset: 0 }),
+      );
+      expect(result.page).toBe(1);
+      expect(result.totalPages).toBe(0);
+    });
+
     it("should return risks without filters when not provided", async () => {
       const tenantId = "tenant-1";
       const query = { limit: 20, page: 2 };

@@ -740,4 +740,177 @@ describe("tenant Controller", () => {
       expect(success).toHaveBeenCalled();
     });
   });
+
+  // Every handler reads `result.message || <default>` and `result.status || <default>`
+  // off the service envelope. These cover the fallback arm for services that
+  // resolve a bare `{ data }` with no message/status.
+  describe("service envelope without message/status", () => {
+    it("getSpecificTenant falls back to 200", async () => {
+      req.params = { tenantId: VALID_TENANT_ID };
+      tenantService.fetchSpecificTenant.mockResolvedValue({
+        data: { id: VALID_TENANT_ID },
+        message: "Fetch tenant successful",
+      });
+
+      await tenantController.getSpecificTenant(req, res, next);
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        { id: VALID_TENANT_ID },
+        null,
+        "Fetch tenant successful",
+        200,
+      );
+    });
+
+    it("createTenant falls back to 201", async () => {
+      req.body = { name: "Acme", code: "ACME" };
+      tenantService.createTenant.mockResolvedValue({
+        data: { id: VALID_TENANT_ID },
+        message: "Tenant created successfully",
+      });
+
+      await tenantController.createTenant(req, res, next);
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        { id: VALID_TENANT_ID },
+        null,
+        "Tenant created successfully",
+        201,
+      );
+    });
+
+    it("updateTenant falls back to its default message and 200", async () => {
+      req.params = { tenantId: VALID_TENANT_ID };
+      req.body = { name: "Renamed" };
+      tenantService.updateTenant.mockResolvedValue({
+        data: { id: VALID_TENANT_ID, name: "Renamed" },
+      });
+
+      await tenantController.updateTenant(req, res, next);
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        { id: VALID_TENANT_ID, name: "Renamed" },
+        null,
+        "Tenant updated successfully",
+        200,
+      );
+    });
+
+    it("deleteTenant falls back to 200", async () => {
+      req.body = { tenantId: VALID_TENANT_ID };
+      tenantService.deleteTenant.mockResolvedValue({
+        data: { id: VALID_TENANT_ID },
+        message: "Tenant deleted successfully",
+      });
+
+      await tenantController.deleteTenant(req, res, next);
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        { id: VALID_TENANT_ID },
+        null,
+        "Tenant deleted successfully",
+        200,
+      );
+    });
+
+    it("getTenantSettings falls back to its default message and 200", async () => {
+      req.params = { tenantId: VALID_TENANT_ID };
+      tenantService.getTenantSettings.mockResolvedValue({
+        data: { theme: "dark" },
+      });
+
+      await tenantController.getTenantSettings(req, res, next);
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        { theme: "dark" },
+        null,
+        "Fetch tenant settings successful",
+        200,
+      );
+    });
+
+    it("updateTenantSettings falls back to 200", async () => {
+      req.params = { tenantId: VALID_TENANT_ID };
+      req.body = { tenantId: VALID_TENANT_ID };
+      tenantService.updateTenantSettings.mockResolvedValue({
+        data: { theme: "light" },
+        message: "Tenant settings updated successfully",
+      });
+
+      await tenantController.updateTenantSettings(req, res, next);
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        { theme: "light" },
+        null,
+        "Tenant settings updated successfully",
+        200,
+      );
+    });
+
+    it("getTenantUserCount falls back to 200", async () => {
+      req.params = { tenantId: VALID_TENANT_ID };
+      tenantService.getTenantUserCount.mockResolvedValue({
+        data: { count: 7 },
+        message: "Fetch tenant user count successful",
+      });
+
+      await tenantController.getTenantUserCount(req, res, next);
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        { count: 7 },
+        null,
+        "Fetch tenant user count successful",
+        200,
+      );
+    });
+
+    it("uploadTenantLogo falls back to its default message and 200", async () => {
+      req.params = { tenantId: VALID_TENANT_ID };
+      req.file = { originalname: "logo.png" };
+      req.uploadFilename = "logo-123.png";
+      tenantUploadService.updateTenantLogo.mockResolvedValue({
+        data: { logo: "logo-123.png" },
+      });
+
+      await tenantController.uploadTenantLogo(req, res, next);
+
+      expect(tenantUploadService.updateTenantLogo).toHaveBeenCalledWith(
+        VALID_TENANT_ID,
+        "logo-123.png",
+        VALID_USER_ID,
+      );
+      expect(success).toHaveBeenCalledWith(
+        res,
+        { logo: "logo-123.png" },
+        null,
+        "Tenant logo uploaded successfully",
+        200,
+      );
+    });
+
+    it("removeTenantLogo falls back to 200", async () => {
+      req.params = { tenantId: VALID_TENANT_ID };
+      tenantUploadService.removeTenantLogo.mockResolvedValue({
+        data: { logo: null },
+        message: "Tenant logo removed successfully",
+      });
+
+      await tenantController.removeTenantLogo(req, res, next);
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        { logo: null },
+        null,
+        "Tenant logo removed successfully",
+        200,
+      );
+    });
+  });
 });

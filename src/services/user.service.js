@@ -812,7 +812,10 @@ exports.updateUserAvatar = async (userId, filename, updatedBy) => {
       }
     }
 
-    await user.update({ avatar_url: filename }, { silent: true });
+    // Must be the MODEL attribute (avatarUrl), not the column name
+    // (avatar_url). Sequelize silently drops unknown keys, so writing the
+    // snake_case name made this a no-op that still reported success.
+    await user.update({ avatarUrl: filename }, { silent: true });
 
     logger.info(`User avatar updated: ${userId} by ${updatedBy}`);
 
@@ -851,7 +854,9 @@ exports.removeUserAvatar = async (userId, updatedBy) => {
         }
       }
 
-      await user.update({ picture: "default.svg" }, { silent: true });
+      // `picture` is a read-only getter over avatarUrl — writing it does
+      // nothing. Reset the real attribute instead.
+      await user.update({ avatarUrl: "default.svg" }, { silent: true });
       logger.info(`User avatar removed: ${userId} by ${updatedBy}`);
     }
 

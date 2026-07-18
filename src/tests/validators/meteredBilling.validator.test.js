@@ -8,6 +8,8 @@ const {
   getAnalytics,
   getBillingHistory,
   validate,
+  validateBody,
+  validateQuery,
 } = require("../../validators/meteredBilling.validator");
 
 describe("meteredBillingValidators", () => {
@@ -242,6 +244,128 @@ describe("meteredBillingValidators", () => {
       const data = { invalid: "data" };
 
       expect(() => validate(data, createUsageAlert)).toThrow();
+    });
+  });
+
+  describe("validateBody middleware", () => {
+    it("should call next() for valid body", () => {
+      const mockReq = { body: { metricName: "api_calls", threshold: 100 } };
+      const mockRes = {};
+      const next = jest.fn();
+
+      validateBody(createUsageAlert)(mockReq, mockRes, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(mockReq.body.metricName).toBe("api_calls");
+    });
+
+    it("should pass error to next() for invalid body", () => {
+      const mockReq = { body: { invalid: "data" } };
+      const mockRes = {};
+      const next = jest.fn();
+
+      validateBody(createUsageAlert)(mockReq, mockRes, next);
+
+      expect(next).toHaveBeenCalled();
+      const error = next.mock.calls[0][0];
+      expect(error).toBeDefined();
+      expect(error.statusCode).toBe(400);
+    });
+
+    it("should handle empty body object", () => {
+      const mockReq = { body: {} };
+      const mockRes = {};
+      const next = jest.fn();
+
+      validateBody(createUsageAlert)(mockReq, mockRes, next);
+
+      expect(next).toHaveBeenCalled();
+      const error = next.mock.calls[0][0];
+      expect(error).toBeDefined();
+      expect(error.statusCode).toBe(400);
+    });
+
+    it("should apply default values for missing optional fields", () => {
+      const mockReq = { body: { metricName: "api_calls", threshold: 100 } };
+      const mockRes = {};
+      const next = jest.fn();
+
+      validateBody(createUsageAlert)(mockReq, mockRes, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(mockReq.body.notificationChannels).toEqual(["email"]);
+      expect(mockReq.body.isEnabled).toBe(true);
+      expect(mockReq.body.comparison).toBe("gte");
+    });
+  });
+
+  describe("validateQuery middleware", () => {
+    it("should call next() for valid query", () => {
+      const mockReq = { query: { period: "30d" } };
+      const mockRes = {};
+      const next = jest.fn();
+
+      validateQuery(getAnalytics)(mockReq, mockRes, next);
+
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should pass error to next() for invalid query", () => {
+      const mockReq = { query: { period: "invalid" } };
+      const mockRes = {};
+      const next = jest.fn();
+
+      validateQuery(getAnalytics)(mockReq, mockRes, next);
+
+      expect(next).toHaveBeenCalled();
+      const error = next.mock.calls[0][0];
+      expect(error).toBeDefined();
+      expect(error.statusCode).toBe(400);
+    });
+
+    it("should handle empty query object", () => {
+      const mockReq = { query: {} };
+      const mockRes = {};
+      const next = jest.fn();
+
+      validateQuery(getAnalytics)(mockReq, mockRes, next);
+
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should not modify req.query (read-only)", () => {
+      const mockReq = { query: { period: "7d" } };
+      const originalQuery = { ...mockReq.query };
+      const mockRes = {};
+      const next = jest.fn();
+
+      validateQuery(getAnalytics)(mockReq, mockRes, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(mockReq.query).toEqual(originalQuery);
+    });
+
+    it("should use empty object when req.body is undefined", () => {
+      const mockReq = {};
+      const mockRes = {};
+      const next = jest.fn();
+
+      validateBody(createUsageAlert)(mockReq, mockRes, next);
+
+      expect(next).toHaveBeenCalled();
+      const error = next.mock.calls[0][0];
+      expect(error).toBeDefined();
+      expect(error.statusCode).toBe(400);
+    });
+
+    it("should use empty object when req.query is undefined", () => {
+      const mockReq = {};
+      const mockRes = {};
+      const next = jest.fn();
+
+      validateQuery(getAnalytics)(mockReq, mockRes, next);
+
+      expect(next).toHaveBeenCalled();
     });
   });
 });

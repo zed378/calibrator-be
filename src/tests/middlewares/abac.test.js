@@ -210,4 +210,55 @@ describe("abac middleware", () => {
     expect(req.abacContext.allowed).toBe(true);
     expect(req.abacContext.reason).toBe("SUPER_ADMIN bypass");
   });
+
+  it("should handle permissions when passed as a string", async () => {
+    spyMatrix.mockResolvedValue({
+      management: ["read"],
+    });
+    const middleware = abac("tenant:read");
+    await middleware(req, res, next);
+    expect(next).toHaveBeenCalled();
+  });
+
+  it("should handle checkSelf when userId is in query params", async () => {
+    req.query.userId = "user-123";
+    const middleware = abac(["user:update"], { checkSelf: true });
+    await middleware(req, res, next);
+    expect(next).toHaveBeenCalled();
+    expect(req.abacContext.reason).toBe("self");
+  });
+
+  it("should fall back to Management matrix key if management is missing", async () => {
+    spyMatrix.mockResolvedValue({
+      Management: ["read"],
+    });
+    const middleware = abac(["tenant:read"]);
+    await middleware(req, res, next);
+    expect(next).toHaveBeenCalled();
+  });
+
+  it("should allow read action if only write permission is present in matrix", async () => {
+    spyMatrix.mockResolvedValue({
+      management: ["write"],
+    });
+    const middleware = abac(["tenant:read"]);
+    await middleware(req, res, next);
+    expect(next).toHaveBeenCalled();
+  });
+
+  it("should deny with 403 when the matrix has neither management key", async () => {
+    // Fail-closed: a role whose matrix carries no management menu at all has
+    // no tenant-admin capability.
+    spyMatrix.mockResolvedValue({ Home: ["read", "write"] });
+    const middleware = abac(["tenant:read"]);
+    await middleware(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      message: "Forbidden: Insufficient permissions",
+      required: ["tenant:read"],
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
 });

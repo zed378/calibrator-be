@@ -2,15 +2,20 @@
  * Tests for validation middleware
  */
 
+// Mirrors the REAL response.util signature: error(res, message, statusCode,
+// details). The previous mock declared (res, details, message, status), which
+// matched a bug in the middleware's call site — so the tests passed while
+// every real validation failure returned a 500 ("Invalid status code:
+// 'Validation Error'"). Keeping the mock honest is what surfaces that.
 jest.mock("../../utils/response.util", () => {
   return {
-    error: jest.fn().mockImplementation((res, details, message, status) => {
-      return res.status(status || 400).json({
-        success: false,
-        status: message,
-        errors: details,
-      });
-    }),
+    error: jest
+      .fn()
+      .mockImplementation((res, message, statusCode = 400, details = null) => {
+        const body = { success: false, status: statusCode, message, data: null };
+        if (details) body.details = details;
+        return res.status(statusCode).json(body);
+      }),
   };
 });
 
@@ -99,8 +104,8 @@ describe("validation middleware", () => {
 
       expect(res.json).toHaveBeenCalled();
       const jsonCall = res.json.mock.calls[0][0];
-      expect(jsonCall).toHaveProperty("errors");
-      expect(Array.isArray(jsonCall.errors)).toBe(true);
+      expect(jsonCall).toHaveProperty("details");
+      expect(Array.isArray(jsonCall.details)).toBe(true);
     });
 
     it("should return 400 status for validation errors", () => {
@@ -218,7 +223,7 @@ describe("validation middleware", () => {
 
       expect(next).not.toHaveBeenCalled();
       const jsonCall = res.json.mock.calls[0][0];
-      expect(jsonCall.errors.length).toBeGreaterThan(1);
+      expect(jsonCall.details.length).toBeGreaterThan(1);
     });
 
     it("should use custom error messages", () => {
@@ -235,7 +240,7 @@ describe("validation middleware", () => {
 
       expect(next).not.toHaveBeenCalled();
       const jsonCall = res.json.mock.calls[0][0];
-      const nameError = jsonCall.errors.find((e) => e.field === "name");
+      const nameError = jsonCall.details.find((e) => e.field === "name");
       expect(nameError).toBeDefined();
     });
 

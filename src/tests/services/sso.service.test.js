@@ -303,4 +303,153 @@ describe("sso.service", () => {
       })).rejects.toThrow("Failed to provision user context");
     });
   });
+
+  describe("parseAndVerifyResponse cert formatting", () => {
+    const signedXml = `
+      <samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol">
+        <saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">
+          <saml:Subject><saml:NameID>john.doe@hospital.com</saml:NameID></saml:Subject>
+        </saml:Assertion>
+        <Signature xmlns="http://www.w3.org/2000/09/xmldsig#">
+          <SignedInfo></SignedInfo>
+          <SignatureValue>dummy-signature</SignatureValue>
+        </Signature>
+      </samlp:Response>
+    `;
+    const signedBase64 = Buffer.from(signedXml).toString("base64");
+
+    it("passes an already-PEM-wrapped cert through without re-wrapping it", async () => {
+      const pem =
+        "-----BEGIN CERTIFICATE-----\nMIIBpayload\n-----END CERTIFICATE-----";
+      const mockVerify = { update: jest.fn(), verify: jest.fn().mockReturnValue(true) };
+      jest.spyOn(crypto, "createVerify").mockReturnValue(mockVerify);
+
+      const result = await ssoService.parseAndVerifyResponse(signedBase64, {
+        sso_idp_cert: `  ${pem}  `,
+      });
+
+      expect(result.email).toBe("john.doe@hospital.com");
+      // The already-wrapped cert is trimmed, but not double-wrapped.
+      expect(mockVerify.verify).toHaveBeenCalledWith(pem, "dummy-signature", "base64");
+    });
+
+    it("wraps a bare base64 cert body in PEM armour", async () => {
+      const mockVerify = { update: jest.fn(), verify: jest.fn().mockReturnValue(true) };
+      jest.spyOn(crypto, "createVerify").mockReturnValue(mockVerify);
+
+      await ssoService.parseAndVerifyResponse(signedBase64, {
+        sso_idp_cert: "MIIBbarecert",
+      });
+
+      expect(mockVerify.verify).toHaveBeenCalledWith(
+        "-----BEGIN CERTIFICATE-----\nMIIBbarecert\n-----END CERTIFICATE-----",
+        "dummy-signature",
+        "base64",
+      );
+    });
+  });
+
+  // ================================================================
+  // OIDC
+  // ================================================================
+  describe("generateOidcAuthRequest", () => {
+    it("builds an authorize URL from the configured authority and redirect URI", () => {
+      const url = new URL(
+        ssoService.generateOidcAuthRequest("acme", {
+          oidc_client_id: "client-123",
+          oidc_authority: "https://login.example.com/tenant/oauth2/v2.0",
+          oidc_redirect_uri: "https://app.example.com/callback",
+        }),
+      );
+
+      expect(url.origin + url.pathname).toBe(
+        "https://login.example.com/tenant/oauth2/v2.0/authorize",
+      );
+      expect(url.searchParams.get("client_id")).toBe("client-123");
+      expect(url.searchParams.get("response_type")).toBe("code");
+      expect(url.searchParams.get("redirect_uri")).toBe(
+        "https://app.example.com/callback",
+      );
+      expect(url.searchParams.get("response_mode")).toBe("query");
+      expect(url.searchParams.get("scope")).toBe("openid profile email");
+    });
+
+    it("defaults the authority to the Entra ID common endpoint", () => {
+      const url = new URL(
+        ssoService.generateOidcAuthRequest("acme", { oidc_client_id: "client-123" }),
+      );
+
+      expect(url.origin + url.pathname).toBe(
+        "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+      );
+    });
+
+    it("defaults the redirect URI to the per-tenant callback route", () => {
+      const url = new URL(
+        ssoService.generateOidcAuthRequest("acme", { oidc_client_id: "client-123" }),
+      );
+
+      expect(url.searchParams.get("redirect_uri")).toBe(
+        "http://localhost:5000/api/v1/auth/sso/oidc/callback/acme",
+      );
+    });
+
+    it("suffixes the state with the tenant code so the callback can route it", () => {
+      const url = new URL(
+        ssoService.generateOidcAuthRequest("acme", { oidc_client_id: "client-123" }),
+      );
+      const state = url.searchParams.get("state");
+
+      expect(state).toMatch(/^[0-9a-f]{32}_acme$/);
+    });
+
+    it("generates a fresh state on every call (no replay)", () => {
+      const settings = { oidc_client_id: "client-123" };
+      const a = new URL(ssoService.generateOidcAuthRequest("acme", settings));
+      const b = new URL(ssoService.generateOidcAuthRequest("acme", settings));
+
+      expect(a.searchParams.get("state")).not.toBe(b.searchParams.get("state"));
+    });
+  });
+
+  describe("verifyOidcCallback", () => {
+    it("delegates verification to the JWKS service and returns its result", async () => {
+      const oidcJwks = require("../../services/oidcJwks");
+      const spy = jest
+        .spyOn(oidcJwks, "verifyOidcCallback")
+        .mockResolvedValue({ email: "user@example.com", firstName: "A", lastName: "B" });
+
+      const settings = { oidc_client_id: "c1", oidc_client_secret: "s1" };
+      const result = await ssoService.verifyOidcCallback(
+        "code-1",
+        settings,
+        "https://app.example.com/callback",
+      );
+
+      expect(spy).toHaveBeenCalledWith(
+        "code-1",
+        settings,
+        "https://app.example.com/callback",
+      );
+      expect(result).toEqual({
+        email: "user@example.com",
+        firstName: "A",
+        lastName: "B",
+      });
+
+      spy.mockRestore();
+    });
+
+    it("propagates the JWKS service's rejection unchanged", async () => {
+      const oidcJwks = require("../../services/oidcJwks");
+      const err = Object.assign(new Error("Invalid id_token signature"), { status: 401 });
+      const spy = jest.spyOn(oidcJwks, "verifyOidcCallback").mockRejectedValue(err);
+
+      await expect(
+        ssoService.verifyOidcCallback("code-1", { oidc_client_id: "c1" }, "https://cb"),
+      ).rejects.toMatchObject({ status: 401, message: "Invalid id_token signature" });
+
+      spy.mockRestore();
+    });
+  });
 });

@@ -16,9 +16,13 @@ const path = require("path");
 const { Connection, db } = require("./src/config");
 const { initSocket } = require("./src/config/socket");
 
-const { globalSanitizer } = require("./src/middlewares/globalSanitizer.middleware");
+const {
+  globalSanitizer,
+} = require("./src/middlewares/globalSanitizer.middleware");
 
-const { ensureFolderExisted } = require("./src/middlewares/createFolder.middleware");
+const {
+  ensureFolderExisted,
+} = require("./src/middlewares/createFolder.middleware");
 
 const { notFound } = require("./src/middlewares/notFound.middleware");
 
@@ -26,7 +30,9 @@ const { errorHandler } = require("./src/middlewares/errorHandlers.middleware");
 
 const { cronBackup } = require("./src/middlewares/backup.middleware");
 
-const { initSessionCleanup } = require("./src/middlewares/sessionCleanup.middleware");
+const {
+  initSessionCleanup,
+} = require("./src/middlewares/sessionCleanup.middleware");
 
 const {
   initCalibrationScheduler,
@@ -39,11 +45,16 @@ const {
   closeRabbitMQ,
 } = require("./src/services/emailQueue.service");
 
-const { initializePostgresRLS } = require("./src/middlewares/rlsEnforcement.middleware");
+const {
+  initializePostgresRLS,
+} = require("./src/middlewares/rlsEnforcement.middleware");
 
 const { accessLog } = require("./src/middlewares/accessLog.middleware");
 
-const { activityLogger, logger } = require("./src/middlewares/activityLog.middleware");
+const {
+  activityLogger,
+  logger,
+} = require("./src/middlewares/activityLog.middleware");
 
 const { WINDOW } = require("./src/constants/rateLimitConstants");
 
@@ -186,10 +197,17 @@ app.use(
 // RATE LIMITERS
 // ======================================================
 
-// Default rate limiter (applied to all routes)
+// Default rate limiter (applied to all routes).
+//
+// Production keeps a real budget. Outside production it is raised, because one
+// full E2E run (75 browser tests, each page load fanning out to several API
+// calls) exhausts a normal budget and then fails for reasons that have nothing
+// to do with the code under test. RATE_LIMIT_MAX overrides either way.
 const defaultLimiter = rateLimit({
   windowMs: WINDOW.FIFTEEN_MIN,
-  max: 500,
+  max:
+    Number(process.env.RATE_LIMIT_MAX) ||
+    (process.env.NODE_ENV === "production" ? 5000 : 100000),
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -382,6 +400,7 @@ const customDomainsRoutes = require("./src/routes/api/customDomains.route");
 const gdprRoutes = require("./src/routes/api/gdpr.route");
 const tenantHierarchyRoutes = require("./src/routes/api/tenantHierarchy.route");
 const eSignatureRoutes = require("./src/routes/api/eSignature.route");
+const kanbanRoutes = require("./src/routes/api/kanban.route");
 
 // ======================================================
 // ROUTES ENDPOINT
@@ -444,6 +463,7 @@ app.use("/api/v1/custom-domains", customDomainsRoutes);
 app.use("/api/v1/gdpr", gdprRoutes);
 app.use("/api/v1/tenant-hierarchy", tenantHierarchyRoutes);
 app.use("/api/v1/esignature", eSignatureRoutes);
+app.use("/api/v1/kanban", kanbanRoutes);
 
 // ======================================================
 // HEALTHCHECK

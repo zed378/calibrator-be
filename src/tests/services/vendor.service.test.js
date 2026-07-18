@@ -320,5 +320,114 @@ describe("vendor.service", () => {
         "DB down",
       );
     });
+
+    it("should not overwrite scorecard when omitted but should set it to 0 when explicitly 0", async () => {
+      // scorecard uses `!== undefined`, so 0 (falsy) must still be assigned.
+      const vendor = mockVendor({ id: "v-z" });
+      vendor.scorecard = 42;
+      vendor.save = jest.fn().mockResolvedValue({});
+      Vendors.findOne.mockResolvedValueOnce(vendor);
+
+      await qualifyVendor({ tenantId: "t-1", id: "v-z", scorecard: 0 });
+
+      expect(vendor.scorecard).toBe(0);
+    });
+
+    it("should leave all optional fields untouched when none are supplied", async () => {
+      const vendor = mockVendor({ id: "v-none" });
+      vendor.approvalStatus = "pending";
+      vendor.scorecard = 42;
+      vendor.lastAuditDate = "2020-01-01";
+      vendor.nextAuditDate = "2021-01-01";
+      vendor.save = jest.fn().mockResolvedValue({});
+      Vendors.findOne.mockResolvedValueOnce(vendor);
+
+      await qualifyVendor({ tenantId: "t-1", id: "v-none" });
+
+      expect(vendor.approvalStatus).toBe("pending");
+      expect(vendor.scorecard).toBe(42);
+      expect(vendor.lastAuditDate).toBe("2020-01-01");
+      expect(vendor.nextAuditDate).toBe("2021-01-01");
+      expect(vendor.save).toHaveBeenCalled();
+    });
+  });
+
+  // ================================================================
+  // Branch coverage: transform helpers + error-normalisation fallbacks
+  // ================================================================
+  describe("transform helpers (via fetchVendors)", () => {
+    it("should map a plain (non-Sequelize) row by spreading it when toJSON is absent", async () => {
+      Vendors.findAndCountAll.mockResolvedValueOnce({
+        rows: [{ id: "plain-1", name: "Plain Vendor" }],
+        count: 1,
+      });
+
+      const result = await fetchVendors({ tenantId: "t-1" });
+
+      expect(result.data.rows).toEqual([{ id: "plain-1", name: "Plain Vendor" }]);
+    });
+
+    it("should map a null row to null rather than throwing", async () => {
+      Vendors.findAndCountAll.mockResolvedValueOnce({ rows: [null], count: 1 });
+
+      const result = await fetchVendors({ tenantId: "t-1" });
+
+      expect(result.data.rows).toEqual([null]);
+    });
+
+    it("should return an empty rows array when the model returns undefined rows", async () => {
+      Vendors.findAndCountAll.mockResolvedValueOnce({ rows: undefined, count: 0 });
+
+      const result = await fetchVendors({ tenantId: "t-1" });
+
+      expect(result.data.rows).toEqual([]);
+    });
+
+    it("should fall back to DEFAULT_LIMIT when limit is not numeric", async () => {
+      Vendors.findAndCountAll.mockResolvedValueOnce({ rows: [], count: 0 });
+
+      await fetchVendors({ tenantId: "t-1", limit: "not-a-number" });
+
+      expect(Vendors.findAndCountAll.mock.calls[0][0].limit).toBe(25); // DEFAULT_LIMIT
+    });
+  });
+
+  describe("error normalisation fallbacks", () => {
+    // Every exported method funnels failures through
+    // `{ status: error.status || 500, message: error.message || "<default>" }`.
+    // A bare throw with neither field must surface the 500 + per-method default.
+    const cases = [
+      ["fetchVendors", () => fetchVendors({ tenantId: "t-1" }), "findAndCountAll", "Failed to fetch vendors"],
+      ["getVendorById", () => getVendorById("t-1", "v-1"), "findOne", "Failed to retrieve vendor"],
+      ["createVendor", () => createVendor("t-1", { name: "X" }), "create", "Failed to create vendor"],
+      ["updateVendor", () => updateVendor("t-1", "v-1", { name: "X" }), "findOne", "Failed to update vendor"],
+      ["deleteVendor", () => deleteVendor("t-1", "v-1"), "findOne", "Failed to delete vendor"],
+      ["qualifyVendor", () => qualifyVendor({ tenantId: "t-1", id: "v-1" }), "findOne", "Failed to qualify vendor"],
+    ];
+
+    it.each(cases)(
+      "%s should default to status 500 and its own message when the error carries neither",
+      async (_name, invoke, mockFn, defaultMessage) => {
+        // A rejection with no `status` and no `message`.
+        Vendors[mockFn].mockRejectedValueOnce({});
+
+        await expect(invoke()).rejects.toEqual({
+          status: 500,
+          message: defaultMessage,
+        });
+      },
+    );
+
+    it.each(cases)(
+      "%s should preserve a status carried on the thrown error",
+      async (_name, invoke, mockFn) => {
+        Vendors[mockFn].mockRejectedValueOnce({ status: 409, message: "Conflict" });
+
+        await expect(invoke()).rejects.toEqual({
+          status: 409,
+          message: "Conflict",
+        });
+      },
+    );
   });
 });

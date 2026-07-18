@@ -22,16 +22,24 @@ const mfaService = require("./mfa.service");
 const crypto = require("crypto");
 
 /**
- * Helper to verify E-signature auth payload and create ESignatureRecord
+ * Re-authenticate the signer. MUST be called BEFORE the state change it
+ * authorises.
+ *
+ * This used to be fused with the record-writing step and invoked AFTER the
+ * certificate had already been mutated and saved — so a caller with a valid
+ * session but a wrong password got a 401 while the certificate was already
+ * approved/signed/revoked in the database, and no ESignatureRecord was
+ * written. Under 21 CFR Part 11 the signature must gate the act, not trail it.
+ *
+ * @throws {AppError} 400 on a missing/invalid payload, 401 on failed re-auth.
  */
-const verifyAndLogSignature = async (tenantId, certificate, userId, action, authOptions) => {
-  const { authMethod, authPayload, meaning, ipAddress, userAgent } = authOptions || {};
-  
+const verifySignatureAuth = async (userId, authOptions) => {
+  const { authMethod, authPayload, meaning } = authOptions || {};
+
   if (!authMethod || !authPayload || !meaning) {
     throw new AppError(400, "Missing required E-signature authentication payload.");
   }
 
-  // 1. Re-authenticate user
   if (authMethod === "password") {
     const valid = await authService.passIsValid(userId, authPayload);
     if (!valid || !valid.data.valid) {
@@ -46,8 +54,18 @@ const verifyAndLogSignature = async (tenantId, certificate, userId, action, auth
   } else {
     throw new AppError(400, "Invalid auth method.");
   }
+};
 
-  // 2. Generate document hash (SHA-256 of certificate state)
+/**
+ * Write the Part 11 compliance record. Called AFTER the state change so the
+ * document hash captures the state that was actually signed.
+ */
+const logSignature = async (tenantId, certificate, userId, action, authOptions) => {
+  // No `|| {}` guard: this only runs after verifySignatureAuth, which throws
+  // 400 unless authMethod/authPayload/meaning are all present.
+  const { authMethod, meaning, ipAddress, userAgent } = authOptions;
+
+  // Document hash (SHA-256 of the signed certificate state)
   const certDataString = JSON.stringify({
     id: certificate.id,
     certificateNumber: certificate.certificateNumber,
@@ -58,7 +76,6 @@ const verifyAndLogSignature = async (tenantId, certificate, userId, action, auth
   });
   const documentHash = crypto.createHash("sha256").update(certDataString).digest("hex");
 
-  // 3. Create compliance log
   await ESignatureRecord.create({
     tenantId,
     entityType: 'Certificate',
@@ -443,12 +460,16 @@ exports.approveCertificate = async (tenantId, certificateId, approvedBy, authOpt
       };
     }
 
+    // Re-authenticate BEFORE mutating: the signature authorises the approval.
+    await verifySignatureAuth(approvedBy, authOptions);
+
     await certificate.approve();
     certificate.approvedBy = approvedBy;
     certificate.issueDate = new Date();
     await certificate.save();
 
-    await verifyAndLogSignature(tenantId, certificate, approvedBy, "approve", authOptions);
+    // Logged after the save so the hash captures the approved state.
+    await logSignature(tenantId, certificate, approvedBy, "approve", authOptions);
 
     logger.info("Certificate approved", {
       certificateId,
@@ -496,11 +517,15 @@ exports.signCertificate = async (
       };
     }
 
+    // Re-authenticate BEFORE mutating: the signature authorises the signing.
+    await verifySignatureAuth(signedBy, authOptions);
+
     await certificate.sign(signatureData, keyId);
     certificate.signedBy = signedBy;
     await certificate.save();
 
-    await verifyAndLogSignature(tenantId, certificate, signedBy, "sign", authOptions);
+    // Logged after the save so the hash captures the signed state.
+    await logSignature(tenantId, certificate, signedBy, "sign", authOptions);
 
     // Publish certificate signed event to message queue
     // This would be handled by the event publisher
@@ -550,9 +575,13 @@ exports.revokeCertificate = async (
       };
     }
 
+    // Re-authenticate BEFORE mutating: the signature authorises the revocation.
+    await verifySignatureAuth(revokedBy, authOptions);
+
     await certificate.revoke(reason);
 
-    await verifyAndLogSignature(tenantId, certificate, revokedBy, "revoke", authOptions);
+    // Logged after the mutation so the hash captures the revoked state.
+    await logSignature(tenantId, certificate, revokedBy, "revoke", authOptions);
 
     logger.info("Certificate revoked", {
       certificateId,

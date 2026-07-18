@@ -296,8 +296,11 @@ exports.enforceQuotas = async (tenantId) => {
         limit: quota.limit,
       });
 
-      // Trigger overage action
-      await handleOverage(tenantId, quota.metric, check.overage);
+      // Trigger overage action. checkQuota returns
+      // {exceeded, usage, limit, percentage, remaining} — there is no
+      // `overage` key, so this passed undefined and the paid-tier path logged
+      // `overage: undefined`. Compute it the same way the violation above does.
+      await handleOverage(tenantId, quota.metric, check.usage - quota.limit);
     }
   }
 

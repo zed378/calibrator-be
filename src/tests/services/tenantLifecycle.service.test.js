@@ -314,4 +314,105 @@ describe("tenantLifecycle.service", () => {
       expect(result[0].action).toBe("offboarded");
     });
   });
+
+  // ================================================================
+  // Coverage: exportTenantData serializes every association
+  // ================================================================
+  describe("exportTenantData serialization", () => {
+    it("calls toJSON on the tenant and on every associated row", async () => {
+      Tenant.findByPk.mockResolvedValue({
+        id: "t1",
+        toJSON: () => ({ id: "t1", name: "Acme" }),
+      });
+      User.findAll.mockResolvedValue([
+        { toJSON: () => ({ id: "u1", email: "a@example.com" }) },
+        { toJSON: () => ({ id: "u2", email: "b@example.com" }) },
+      ]);
+      TenantSettings.findAll.mockResolvedValue([
+        { toJSON: () => ({ key: "lifecycle_status", value: "ACTIVE" }) },
+      ]);
+      Subscription.findAll.mockResolvedValue([
+        { toJSON: () => ({ id: "s1", planId: "pro" }) },
+      ]);
+      Invoice.findAll.mockResolvedValue([
+        { toJSON: () => ({ id: "i1", amount: 100 }) },
+        { toJSON: () => ({ id: "i2", amount: 250 }) },
+      ]);
+
+      const result = await tenantLifecycle.exportTenantData("t1");
+
+      expect(result.tenant).toEqual({ id: "t1", name: "Acme" });
+      expect(result.users).toEqual([
+        { id: "u1", email: "a@example.com" },
+        { id: "u2", email: "b@example.com" },
+      ]);
+      expect(result.settings).toEqual([{ key: "lifecycle_status", value: "ACTIVE" }]);
+      expect(result.subscriptions).toEqual([{ id: "s1", planId: "pro" }]);
+      expect(result.invoices).toEqual([
+        { id: "i1", amount: 100 },
+        { id: "i2", amount: 250 },
+      ]);
+      expect(result.exportedAt).toBeInstanceOf(Date);
+
+      expect(User.findAll).toHaveBeenCalledWith({ where: { tenantId: "t1" } });
+      expect(TenantSettings.findAll).toHaveBeenCalledWith({ where: { tenantId: "t1" } });
+      expect(Subscription.findAll).toHaveBeenCalledWith({ where: { tenantId: "t1" } });
+      expect(Invoice.findAll).toHaveBeenCalledWith({ where: { tenantId: "t1" } });
+    });
+  });
+
+  describe("getTenantLifecycleStatus lifecycleStatus fallback", () => {
+    it("falls back to tenant.status when no lifecycle_status setting exists", async () => {
+      Tenant.findByPk.mockResolvedValue({
+        id: "t1",
+        status: "SUSPENDED",
+        gracePeriodExpiresAt: null,
+        offboardedAt: null,
+        offboardRetentionExpiresAt: null,
+      });
+      TenantSettings.findOne.mockResolvedValue(null);
+
+      const result = await tenantLifecycle.getTenantLifecycleStatus("t1");
+
+      expect(result.lifecycleStatus).toBe("SUSPENDED");
+      expect(result.gracePeriodExpired).toBe(false);
+    });
+
+    it("falls back to tenant.status when the setting row has a null value", async () => {
+      Tenant.findByPk.mockResolvedValue({
+        id: "t1",
+        status: "ACTIVE",
+        gracePeriodExpiresAt: null,
+        offboardedAt: null,
+        offboardRetentionExpiresAt: null,
+      });
+      TenantSettings.findOne.mockResolvedValue({ value: null });
+
+      const result = await tenantLifecycle.getTenantLifecycleStatus("t1");
+
+      expect(result.lifecycleStatus).toBe("ACTIVE");
+    });
+  });
+
+  describe("processExpiredGracePeriods no-op paths", () => {
+    it("returns an empty list when no suspended tenant has an expired grace period", async () => {
+      const future = new Date(Date.now() + 86400000);
+      Tenant.findAll.mockResolvedValue([
+        { id: "t1", status: "SUSPENDED", gracePeriodExpiresAt: future },
+      ]);
+
+      const result = await tenantLifecycle.processExpiredGracePeriods();
+
+      expect(result).toEqual([]);
+      expect(Tenant.findByPk).not.toHaveBeenCalled();
+    });
+
+    it("returns an empty list when no tenants match the query", async () => {
+      Tenant.findAll.mockResolvedValue([]);
+
+      const result = await tenantLifecycle.processExpiredGracePeriods();
+
+      expect(result).toEqual([]);
+    });
+  });
 });

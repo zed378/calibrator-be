@@ -26,6 +26,10 @@ const {
   restrictProcessing: restrictValidator,
 } = require("../../validators/gdpr.validator");
 const { validateUuid } = require("../../middlewares/validateUuid.middleware");
+// These are Joi SCHEMAS. They were passed as `schema.validate`, i.e. Joi's own
+// (value, options) method, which express called as (req, res, next) — it threw
+// and 500'd every write route. `validate(schema)` is the router-facing factory.
+const { validate } = require("../../middlewares/validation.middleware");
 
 /**
  * @swagger
@@ -109,7 +113,7 @@ router.post("/export", auth, exportUserData);
  *       401:
  *         description: Unauthorized
  */
-router.post("/erasure", auth, erasureValidator.validate, requestErasure);
+router.post("/erasure", auth, validate(erasureValidator), requestErasure);
 
 /**
  * @swagger
@@ -199,7 +203,7 @@ router.get(
  *       401:
  *         description: Unauthorized
  */
-router.put("/consent", auth, consentValidator.validate, updateConsent);
+router.put("/consent", auth, validate(consentValidator), updateConsent);
 
 /**
  * @swagger
@@ -315,7 +319,7 @@ router.get("/processing", auth, getProcessingActivities);
  *       401:
  *         description: Unauthorized
  */
-router.put("/rectify", auth, rectifyValidator.validate, rectifyData);
+router.put("/rectify", auth, validate(rectifyValidator), rectifyData);
 
 /**
  * @swagger
@@ -360,6 +364,6 @@ router.put("/rectify", auth, rectifyValidator.validate, rectifyData);
  *       401:
  *         description: Unauthorized
  */
-router.post("/restrict", auth, restrictValidator.validate, restrictProcessing);
+router.post("/restrict", auth, validate(restrictValidator), restrictProcessing);
 
 module.exports = router;

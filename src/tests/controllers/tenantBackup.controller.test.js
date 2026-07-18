@@ -43,6 +43,14 @@ jest.mock("../../utils/response.util", () => ({
   error: jest.fn(),
 }));
 
+// downloadBackup falls back to fs.statSync(filePath).size when the backup
+// metadata carries no fileSize. Only statSync is stubbed.
+jest.mock("fs", () => ({
+  ...jest.requireActual("fs"),
+  statSync: jest.fn(),
+}));
+
+const fs = require("fs");
 const tenantBackupController = require("../../controllers/tenantBackup.controller");
 const tenantBackupService = require("../../services/tenantBackup.service");
 const { TenantBackup, Users, Tenants } = require("../../models");
@@ -99,6 +107,24 @@ describe("tenantBackup Controller", () => {
       expect(success).toHaveBeenCalled();
     });
 
+    it("should fall back to its default message and 201 when the service omits them", async () => {
+      req.params = { tenantId: TENANT_ID };
+      req.body = { name: "nightly" };
+      tenantBackupService.createBackup.mockResolvedValue({
+        data: { id: BACKUP_ID, name: "nightly" },
+      });
+
+      await tenantBackupController.createBackup(req, res, next);
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        { id: BACKUP_ID, name: "nightly" },
+        null,
+        "Backup created successfully",
+        201,
+      );
+    });
+
     it("should return 400 when name is missing", async () => {
       req.params = { tenantId: TENANT_ID };
       req.body = { description: "no name" };
@@ -153,6 +179,29 @@ describe("tenantBackup Controller", () => {
         {},
       );
     });
+
+    it("should default to page 1 / limit 20 when the query is empty", async () => {
+      req.params = { tenantId: TENANT_ID };
+      req.query = {};
+      TenantBackup.getTenantBackups.mockResolvedValue({
+        rows: [{ id: BACKUP_ID }],
+        count: 45,
+      });
+
+      await tenantBackupController.getBackups(req, res, next);
+
+      expect(TenantBackup.getTenantBackups).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: 20, offset: 0 }),
+        {},
+      );
+      expect(success).toHaveBeenCalledWith(
+        res,
+        [{ id: BACKUP_ID }],
+        { total: 45, page: 1, limit: 20, totalPages: 3 },
+        "Backups retrieved successfully",
+        200,
+      );
+    });
   });
 
   describe("getBackup", () => {
@@ -188,8 +237,13 @@ describe("tenantBackup Controller", () => {
     it("should download a backup file", async () => {
       req.params = { backupId: BACKUP_ID };
       tenantBackupService.downloadBackup.mockResolvedValue({
-        filePath: "/backups/backup.zip",
-        metadata: { filename: "backup.zip", fileSize: 1024 },
+        success: true,
+        status: 200,
+        message: "Backup ready for download",
+        data: {
+          filePath: "/backups/backup.zip",
+          metadata: { filename: "backup.zip", fileSize: 1024 },
+        },
       });
 
       await tenantBackupController.downloadBackup(req, res, next);
@@ -197,6 +251,31 @@ describe("tenantBackup Controller", () => {
       expect(tenantBackupService.downloadBackup).toHaveBeenCalledWith(BACKUP_ID, {});
       expect(res.setHeader).toHaveBeenCalledWith("Content-Disposition", "attachment; filename=\"backup.zip\"");
       expect(res.setHeader).toHaveBeenCalledWith("Content-Type", "application/zip");
+    });
+
+    it("should fall back to statSync for Content-Length when metadata has no fileSize", async () => {
+      req.params = { backupId: BACKUP_ID };
+      tenantBackupService.downloadBackup.mockResolvedValue({
+        data: {
+          filePath: "/backups/nested/backup-2.zip",
+          metadata: {},
+        },
+      });
+      fs.statSync.mockReturnValue({ size: 4096 });
+
+      await tenantBackupController.downloadBackup(req, res, next);
+
+      expect(fs.statSync).toHaveBeenCalledWith("/backups/nested/backup-2.zip");
+      expect(res.setHeader).toHaveBeenCalledWith("Content-Length", 4096);
+      // filename is derived from the stored path, not from metadata
+      expect(res.setHeader).toHaveBeenCalledWith(
+        "Content-Disposition",
+        'attachment; filename="backup-2.zip"',
+      );
+      expect(res.download).toHaveBeenCalledWith(
+        "/backups/nested/backup-2.zip",
+        "backup-2.zip",
+      );
     });
   });
 
@@ -237,6 +316,31 @@ describe("tenantBackup Controller", () => {
         expect.objectContaining({ restoredById: USER_ID, mergeData: true }),
       );
     });
+
+    it("should default mergeData to false when the body omits it", async () => {
+      req.params = { backupId: BACKUP_ID };
+      req.body = {};
+      tenantBackupService.restoreBackup.mockResolvedValue({
+        data: { tenantId: TENANT_ID },
+      });
+
+      await tenantBackupController.restoreBackup(req, res, next);
+
+      expect(tenantBackupService.restoreBackup).toHaveBeenCalledWith({
+        backupId: BACKUP_ID,
+        restoredById: USER_ID,
+        mergeData: false,
+        models: {},
+      });
+      // restoreBackup always responds 200 and falls back to its default message
+      expect(success).toHaveBeenCalledWith(
+        res,
+        { tenantId: TENANT_ID },
+        null,
+        "Backup restored successfully",
+        200,
+      );
+    });
   });
 
   describe("deleteBackup", () => {
@@ -253,6 +357,21 @@ describe("tenantBackup Controller", () => {
 
       expect(tenantBackupService.deleteBackup).toHaveBeenCalledWith(BACKUP_ID, USER_ID, {});
       expect(success).toHaveBeenCalled();
+    });
+
+    it("should fall back to its default message when the service omits one", async () => {
+      req.params = { backupId: BACKUP_ID };
+      tenantBackupService.deleteBackup.mockResolvedValue({ data: null });
+
+      await tenantBackupController.deleteBackup(req, res, next);
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        null,
+        null,
+        "Backup deleted successfully",
+        200,
+      );
     });
   });
 

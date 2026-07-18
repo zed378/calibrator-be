@@ -13,7 +13,11 @@ exports.validate = (schema) => {
         message: item.message,
       }));
 
-      return error(res, formattedErrors, "Validation Error", 400);
+      // Signature is error(res, message, statusCode, details) — the args were
+      // previously passed as (details, message, statusCode), so `statusCode`
+      // received the string "Validation Error" and Express threw
+      // "Invalid status code", turning every validation failure into a 500.
+      return error(res, "Validation Error", 400, formattedErrors);
     }
 
     req.body = value;

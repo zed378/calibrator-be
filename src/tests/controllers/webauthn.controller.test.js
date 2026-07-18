@@ -3,6 +3,7 @@
  */
 
 jest.mock("../../services/webauthn.service", () => ({
+  getStatus: jest.fn(),
   getRegistrationOptions: jest.fn(),
   verifyRegistration: jest.fn(),
   getLoginOptions: jest.fn(),
@@ -40,6 +41,39 @@ describe("webauthn Controller", () => {
       json: jest.fn().mockReturnThis(),
     };
     next = jest.fn();
+  });
+
+  describe("getStatus", () => {
+    it("should return webauthn status for the authenticated user", async () => {
+      const status = {
+        enabled: true,
+        signCount: 3,
+        lastUpdatedAt: "2026-07-17T00:00:00.000Z",
+      };
+      webauthnService.getStatus.mockResolvedValue(status);
+
+      await webauthnController.getStatus(req, res, next);
+
+      // Service signature is getStatus(tenantId, userId) — in that order.
+      expect(webauthnService.getStatus).toHaveBeenCalledWith(TENANT_ID, USER_ID);
+      expect(success).toHaveBeenCalledWith(res, status, null, "WebAuthn status");
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        data: status,
+        message: "WebAuthn status",
+      });
+    });
+
+    it("should pass undefined ids when there is no authenticated user", async () => {
+      req.user = undefined;
+      webauthnService.getStatus.mockResolvedValue({ enabled: false });
+
+      await webauthnController.getStatus(req, res, next);
+
+      expect(webauthnService.getStatus).toHaveBeenCalledWith(undefined, undefined);
+      expect(success).toHaveBeenCalled();
+    });
   });
 
   describe("getRegistrationOptions", () => {

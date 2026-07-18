@@ -466,4 +466,125 @@ describe("billing.service", () => {
       expect(includeArg[0].as).toBe("subscription");
     });
   });
+
+  // ================================================================
+  // Coverage: transform helpers + error-default branches
+  // ================================================================
+  describe("transformRecord branches", () => {
+    it("serializes a Sequelize instance via toJSON", async () => {
+      Subscription.findOne.mockResolvedValueOnce({
+        id: "sub-1",
+        toJSON: () => ({ id: "sub-1", planId: "pro" }),
+      });
+
+      const result = await billingService.getSubscription("t-1");
+
+      expect(result.data).toEqual({ id: "sub-1", planId: "pro" });
+    });
+
+    it("spreads a plain object that has no toJSON", async () => {
+      Subscription.findOne.mockResolvedValueOnce({ id: "sub-1", planId: "basic" });
+
+      const result = await billingService.getSubscription("t-1");
+
+      expect(result.data).toEqual({ id: "sub-1", planId: "basic" });
+    });
+
+    it("returns null data when the auto-created subscription is null", async () => {
+      Subscription.findOne.mockResolvedValueOnce(null);
+      Subscription.create.mockResolvedValueOnce(null);
+
+      const result = await billingService.getSubscription("t-1");
+
+      expect(result.success).toBe(true);
+      expect(result.data).toBeNull();
+    });
+  });
+
+  describe("getSubscription error defaults", () => {
+    it("defaults to 500 and a generic message when the error has neither", async () => {
+      Subscription.findOne.mockRejectedValueOnce({});
+
+      await expect(billingService.getSubscription("t-1")).rejects.toEqual({
+        status: 500,
+        message: "Failed to retrieve subscription",
+      });
+    });
+
+    it("preserves a status carried by the error", async () => {
+      Subscription.findOne.mockRejectedValueOnce({ status: 503, message: "DB offline" });
+
+      await expect(billingService.getSubscription("t-1")).rejects.toEqual({
+        status: 503,
+        message: "DB offline",
+      });
+    });
+  });
+
+  describe("updateSubscription error defaults", () => {
+    it("defaults to 500 and a generic message when the error has neither", async () => {
+      Subscription.findOne.mockRejectedValueOnce({});
+
+      await expect(billingService.updateSubscription("t-1", {})).rejects.toEqual({
+        status: 500,
+        message: "Failed to update subscription",
+      });
+    });
+
+    it("passes an empty payload through when no updatable field is supplied", async () => {
+      const update = jest.fn().mockResolvedValue(undefined);
+      Subscription.findOne.mockResolvedValueOnce({ id: "sub-1", update });
+
+      await billingService.updateSubscription("t-1", {});
+
+      expect(update).toHaveBeenCalledWith({});
+    });
+
+    it("surfaces the 404 AppError as status 404", async () => {
+      Subscription.findOne.mockResolvedValueOnce(null);
+
+      await expect(billingService.updateSubscription("t-1", { planId: "pro" })).rejects.toEqual({
+        status: 404,
+        message: "Subscription not found for this tenant",
+      });
+    });
+  });
+
+  describe("fetchInvoices coverage gaps", () => {
+    it("tolerates an undefined rows array from the model", async () => {
+      Invoice.findAndCountAll.mockResolvedValueOnce({ count: 0, rows: undefined });
+
+      const result = await billingService.fetchInvoices({ tenantId: "t-1" });
+
+      expect(result.data.rows).toEqual([]);
+    });
+
+    it("maps a null row to null rather than throwing", async () => {
+      Invoice.findAndCountAll.mockResolvedValueOnce({ count: 1, rows: [null] });
+
+      const result = await billingService.fetchInvoices({ tenantId: "t-1" });
+
+      expect(result.data.rows).toEqual([null]);
+    });
+
+    it("falls back to DEFAULT_LIMIT when limit is not a number", async () => {
+      const { DEFAULT_LIMIT } = require("../../constants");
+      Invoice.findAndCountAll.mockResolvedValueOnce({ count: 0, rows: [] });
+
+      await billingService.fetchInvoices({ tenantId: "t-1", limit: "abc" });
+
+      expect(Invoice.findAndCountAll).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: DEFAULT_LIMIT }),
+      );
+    });
+
+    it("defaults to 500 and a generic message when the error has neither", async () => {
+      Invoice.findAndCountAll.mockRejectedValueOnce({});
+
+      await expect(billingService.fetchInvoices({ tenantId: "t-1" })).rejects.toEqual({
+        status: 500,
+        message: "Failed to fetch invoices",
+      });
+    });
+  });
 });

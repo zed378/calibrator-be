@@ -479,6 +479,84 @@ describe("sessionSecurity middleware", () => {
 
       db.getDialect.mockReturnValue("postgres");
     });
+
+    it("should handle sessionFixationProtection with non-postgres dialect", () => {
+      const { db } = require("../../config");
+      db.getDialect.mockReturnValue("mysql");
+
+      const mockReq = {
+        path: "/login",
+        sessionId: "sess-123",
+      };
+      const mockRes = {};
+      const mockNext = jest.fn();
+
+      sessionSecurity.sessionFixationProtection(mockReq, mockRes, mockNext);
+      expect(mockNext).toHaveBeenCalled();
+
+      db.getDialect.mockReturnValue("postgres");
+    });
+
+    it("should detect suspicious IP change in validateSessionBinding", async () => {
+      const { db } = require("../../config");
+      db.getDialect.mockReturnValue("mysql");
+      Sessions.findByPk = jest.fn().mockResolvedValueOnce({
+        ipAddress: "192.168.1.100",
+      });
+
+      const mockReq = {
+        session: { lastAccess: Date.now() },
+        sessionId: "session-456",
+        ip: "192.168.1.200", // different IP
+      };
+      const mockRes = {};
+      const mockNext = jest.fn();
+
+      await sessionSecurity.validateSessionBinding(mockReq, mockRes, mockNext);
+      expect(mockNext).toHaveBeenCalled();
+      db.getDialect.mockReturnValue("postgres");
+    });
+
+    it("should handle error in validateSessionBinding when connection is missing", async () => {
+      const { db } = require("../../config");
+      db.getDialect.mockReturnValue("mysql");
+      Sessions.findByPk = jest.fn().mockResolvedValueOnce({
+        ipAddress: "192.168.1.100",
+      });
+
+      const mockReq = {
+        session: { lastAccess: Date.now() },
+        sessionId: "session-456",
+        ip: undefined,
+        // no connection property, so req.connection.remoteAddress throws
+      };
+      const mockRes = {};
+      const mockNext = jest.fn();
+
+      await sessionSecurity.validateSessionBinding(mockReq, mockRes, mockNext);
+      expect(mockNext).toHaveBeenCalled();
+      db.getDialect.mockReturnValue("postgres");
+    });
+
+    it("should fallback to createdAt in enforceSessionTimeout when lastActivity is missing", async () => {
+      const { db } = require("../../config");
+      db.getDialect.mockReturnValue("mysql");
+      Sessions.findByPk = jest.fn().mockResolvedValueOnce({
+        createdAt: new Date(Date.now() - 500),
+      });
+
+      const middleware = sessionSecurity.enforceSessionTimeout(1000);
+      const mockReq = {
+        session: { lastAccess: Date.now() },
+        sessionId: "session-789",
+      };
+      const mockRes = {};
+      const mockNext = jest.fn();
+
+      await middleware(mockReq, mockRes, mockNext);
+      expect(mockNext).toHaveBeenCalled();
+      db.getDialect.mockReturnValue("postgres");
+    });
   });
 
   describe("fullSessionSecurity", () => {

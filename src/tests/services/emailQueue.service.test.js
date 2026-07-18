@@ -7,6 +7,7 @@ jest.mock("amqplib", () => {
 jest.mock("../../services/email.service", () => ({
   sendOtpEmail: jest.fn(),
   sendActivationEmail: jest.fn(),
+  sendNotificationEmail: jest.fn(),
 }));
 
 jest.mock("../../middlewares/activityLog.middleware", () => ({
@@ -24,17 +25,26 @@ describe("emailQueue.service", () => {
   let emailQueueService;
   let sendOtpEmail;
   let sendActivationEmail;
+  let sendNotificationEmail;
   let logger;
+  let envBackup;
 
   beforeEach(() => {
     jest.resetModules();
     jest.clearAllMocks();
     jest.useFakeTimers();
 
+    envBackup = {
+      RABBITMQ_URL: process.env.RABBITMQ_URL,
+      RABBITMQ_HOST: process.env.RABBITMQ_HOST,
+      RABBITMQ_PORT: process.env.RABBITMQ_PORT,
+    };
+
     amqplib = require("amqplib");
     const emailService = require("../../services/email.service");
     sendOtpEmail = emailService.sendOtpEmail;
     sendActivationEmail = emailService.sendActivationEmail;
+    sendNotificationEmail = emailService.sendNotificationEmail;
     logger = require("../../middlewares/activityLog.middleware").logger;
 
     emailQueueService = require("../../services/emailQueue.service");
@@ -74,6 +84,14 @@ describe("emailQueue.service", () => {
   afterEach(async () => {
     jest.useRealTimers();
     try { await emailQueueService.closeRabbitMQ(); } catch (e) {}
+    // Restore any RABBITMQ_* vars a test deleted/overrode for the URL-building tests.
+    for (const [key, value] of Object.entries(envBackup)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
   });
 
   describe("Queue initialization & RabbitMQ Connection", () => {
@@ -106,6 +124,49 @@ describe("emailQueue.service", () => {
 
       expect(amqplib.connect).toHaveBeenCalledTimes(1);
       expect(mockConnection.createChannel).toHaveBeenCalledTimes(1);
+    });
+
+    it("should reopen only the channel when the channel closed but the connection is still open", async () => {
+      await emailQueueService.processEmailQueue();
+      expect(amqplib.connect).toHaveBeenCalledTimes(1);
+
+      // Channel dropped, connection still healthy: the cached connection must be
+      // reused and only a fresh channel opened.
+      mockChannel.isOpen = false;
+
+      await emailQueueService.queueActivationEmail({ email: "test@mail.com" });
+
+      expect(amqplib.connect).toHaveBeenCalledTimes(1);
+      expect(mockConnection.createChannel).toHaveBeenCalledTimes(2);
+    });
+
+    it("should build the broker URL from RABBITMQ_HOST/PORT when RABBITMQ_URL is unset", async () => {
+      delete process.env.RABBITMQ_URL;
+      process.env.RABBITMQ_HOST = "rabbit.internal";
+      process.env.RABBITMQ_PORT = "5673";
+
+      await emailQueueService.processEmailQueue();
+
+      expect(amqplib.connect).toHaveBeenCalledWith("amqp://rabbit.internal:5673");
+    });
+
+    it("should default the broker URL to localhost:5672 when no RABBITMQ_* vars are set", async () => {
+      delete process.env.RABBITMQ_URL;
+      delete process.env.RABBITMQ_HOST;
+      delete process.env.RABBITMQ_PORT;
+
+      await emailQueueService.processEmailQueue();
+
+      expect(amqplib.connect).toHaveBeenCalledWith("amqp://localhost:5672");
+    });
+
+    it("should prefer RABBITMQ_URL over the host/port pair", async () => {
+      process.env.RABBITMQ_URL = "amqp://user:pass@broker.example.com:5672";
+      process.env.RABBITMQ_HOST = "ignored.internal";
+
+      await emailQueueService.processEmailQueue();
+
+      expect(amqplib.connect).toHaveBeenCalledWith("amqp://user:pass@broker.example.com:5672");
     });
 
     it("should handle connection close event", async () => {
@@ -179,6 +240,67 @@ describe("emailQueue.service", () => {
       expect(result).toBe(true);
       expect(logger.error).toHaveBeenCalledWith("Failed to send email", expect.any(Object));
     });
+
+    it("should add notification email to queue", async () => {
+      await emailQueueService.queueNotificationEmail({
+        email: "test@mail.com",
+        firstName: "Test",
+        title: "Device due",
+        message: "Calibration is due",
+        actionUrl: "https://app.example.com/d/1",
+      });
+
+      expect(mockChannel.sendToQueue).toHaveBeenCalledWith("email_queue", expect.any(Buffer), expect.any(Object));
+
+      const queued = JSON.parse(mockChannel.sendToQueue.mock.calls[0][1].toString());
+      expect(queued.type).toBe("notification");
+      expect(queued.retries).toBe(0);
+      expect(queued.maxRetries).toBe(3);
+      expect(queued.data).toEqual({
+        email: "test@mail.com",
+        firstName: "Test",
+        title: "Device due",
+        message: "Calibration is due",
+        actionUrl: "https://app.example.com/d/1",
+      });
+    });
+
+    // ----------------------------------------------------------------
+    // Synchronous fallback (sendEmailDirectly) — only reachable when the
+    // broker is unavailable, so each type needs its own connect failure.
+    // ----------------------------------------------------------------
+    it("should fall back to sending an otp email directly when the broker is down", async () => {
+      amqplib.connect.mockRejectedValueOnce(new Error("Queue offline"));
+      sendOtpEmail.mockResolvedValueOnce(true);
+
+      const result = await emailQueueService.queueOtpEmail({
+        email: "test@mail.com",
+        otp: "123456",
+      });
+
+      expect(result).toBe(true);
+      expect(sendOtpEmail).toHaveBeenCalledWith(
+        expect.objectContaining({ email: "test@mail.com", otp: "123456" }),
+      );
+      expect(mockChannel.sendToQueue).not.toHaveBeenCalled();
+    });
+
+    it("should fall back to sending a notification email directly when the broker is down", async () => {
+      amqplib.connect.mockRejectedValueOnce(new Error("Queue offline"));
+      sendNotificationEmail.mockResolvedValueOnce(true);
+
+      const result = await emailQueueService.queueNotificationEmail({
+        email: "test@mail.com",
+        title: "Device due",
+        message: "Calibration is due",
+      });
+
+      expect(result).toBe(true);
+      expect(sendNotificationEmail).toHaveBeenCalledWith(
+        expect.objectContaining({ email: "test@mail.com", title: "Device due" }),
+      );
+      expect(mockChannel.sendToQueue).not.toHaveBeenCalled();
+    });
   });
 
   describe("process email queue consumer", () => {
@@ -233,6 +355,18 @@ describe("emailQueue.service", () => {
 
       expect(logger.warn).toHaveBeenCalledWith("Unknown email job type", { type: "unknown" });
       expect(mockChannel.nack).toHaveBeenCalledWith(msg, false, false);
+    });
+
+    it("should process notification email successfully", async () => {
+      sendNotificationEmail.mockResolvedValueOnce(true);
+      const job = { type: "notification", data: { email: "a@b.com", title: "T", message: "M" } };
+      const msg = { content: Buffer.from(JSON.stringify(job)) };
+
+      await processJob(msg);
+
+      expect(sendNotificationEmail).toHaveBeenCalledWith(job.data);
+      expect(mockChannel.ack).toHaveBeenCalledWith(msg);
+      expect(mockChannel.nack).not.toHaveBeenCalled();
     });
 
     it("should handle email sending failure and retry", async () => {

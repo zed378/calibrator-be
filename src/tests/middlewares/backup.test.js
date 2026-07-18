@@ -101,8 +101,8 @@ describe("backup middleware", () => {
       // log folder: readdir(["log1.txt"]) -> for zipFolder
       // data folder: readdir(["data1.db"]) -> for zipFolder
       mockFse.readdir
-        .mockResolvedValueOnce(["log1.txt"])  // log folder
-        .mockResolvedValueOnce(["data1.db"]);  // data folder
+        .mockResolvedValueOnce(["log1.txt"]) // log folder
+        .mockResolvedValueOnce(["data1.db"]); // data folder
 
       // copy called 2 times: log then data
       // writeFile called 2 times: log zip then data zip
@@ -119,9 +119,7 @@ describe("backup middleware", () => {
     });
 
     it("should handle errors gracefully", async () => {
-      mockFse.ensureDir.mockRejectedValueOnce(
-        new Error("Disk error"),
-      );
+      mockFse.ensureDir.mockRejectedValueOnce(new Error("Disk error"));
 
       await backupAndZip();
 
@@ -145,11 +143,11 @@ describe("backup middleware", () => {
       mockFse.pathExists.mockResolvedValue(false);
       // First readdir returns a subfolder name
       mockFse.readdir
-        .mockResolvedValueOnce(["subfolder"])  // data folder has subfolder
-        .mockResolvedValueOnce([]);              // subfolder is empty
+        .mockResolvedValueOnce(["subfolder"]) // data folder has subfolder
+        .mockResolvedValueOnce([]); // subfolder is empty
       // stat: first call (subfolder) is a directory, second call (data1.db) is not
       mockFse.stat
-        .mockResolvedValueOnce({ isDirectory: () => true })  // subfolder
+        .mockResolvedValueOnce({ isDirectory: () => true }) // subfolder
         .mockResolvedValueOnce({ isDirectory: () => false }); // data1.db
 
       await backupAndZip();
@@ -210,9 +208,7 @@ describe("backup middleware", () => {
 
     it("should log error when fse.outputFile fails for a file", async () => {
       const JSZip = require("jszip");
-      mockFse.outputFile.mockRejectedValueOnce(
-        new Error("Permission denied"),
-      );
+      mockFse.outputFile.mockRejectedValueOnce(new Error("Permission denied"));
       JSZip.mockImplementation(() => ({
         loadAsync: jest.fn().mockResolvedValue({
           files: {
@@ -235,7 +231,10 @@ describe("backup middleware", () => {
   describe("deleteOldFiles", () => {
     it("should remove files older than 30 days", async () => {
       diffReturnValue = 36;
-      mockFse.readdir.mockImplementation(() => ["old-backup.zip", "recent.zip"]);
+      mockFse.readdir.mockImplementation(() => [
+        "old-backup.zip",
+        "recent.zip",
+      ]);
 
       await deleteOldFiles();
 
@@ -283,56 +282,87 @@ describe("backup middleware", () => {
       expect(logger.info).toHaveBeenCalledWith("Backup completed successfully");
     });
 
-    it("should handle errors in cron callback", async () => {
-      process.env.BACKUP_SCHEDULER = "0 0 * * *";
-      // Replace deleteOldFiles with a throwing stub BEFORE cronBackup creates the closure.
-      // We do this by temporarily removing the module from cache, redefining it with
-      // a throwing deleteOldFiles, then calling cronBackup so the closure captures it.
-      jest.isolateModules(() => {
-        // Create a throwing deleteOldFiles
-        const throwingDeleteOldFiles = jest.fn().mockRejectedValueOnce(
-          new Error("Test cron error"),
-        );
-        // Re-mock the module with the throwing function
-        jest.doMock(
-          "../../middlewares/backup.middleware",
-          () => ({
-            backupAndZip: jest.fn().mockResolvedValue(undefined),
-            deleteOldFiles: throwingDeleteOldFiles,
-            cronBackup: jest.fn(),
-            extractZip: jest.fn(),
-          }),
-        );
-      });
-      // Use doMock to replace the module before cronBackup
-      jest.doMock("../../middlewares/backup.middleware", () => ({
-        backupAndZip: jest.fn().mockResolvedValue(undefined),
-        deleteOldFiles: jest.fn().mockRejectedValueOnce(
-          new Error("Test cron error"),
-        ),
-        cronBackup: cronBackup,
-        extractZip: jest.fn(),
-      }));
-      // The above approach is complex. Simplest working approach:
-      // Directly test the error handling by verifying the logger.error
-      // call pattern when deleteOldFiles throws.
+    it("should complete without error when backupAndZip and deleteOldFiles absorb their own failures", async () => {
+      // Both helpers catch internally, so a failure inside either of them is
+      // logged by that helper and the cron callback still reports success.
       mockFse.pathExists.mockResolvedValue(false);
+      mockFse.copy.mockRejectedValueOnce(new Error("Copy failed"));
       mockFse.readdir.mockResolvedValue(["data1.db"]);
-      // We can't easily trigger the cron catch since both backupAndZip
-      // and deleteOldFiles catch internally. But the cron callback structure
-      // (lines 141-148) includes the error handler which IS exercised when
-      // cronBackup's schedule callback receives an error from outside.
-      // We test that the cron schedule callback is properly structured
-      // by verifying the logger.error pattern.
+
       cronBackup();
       const scheduledCb = mockSchedule.mock.calls[0][1];
       await scheduledCb();
 
-      // backupAndZip and deleteOldFiles both catch internally,
-      // so the cron callback completes with "Backup completed successfully".
-      // The cron catch block (lines 147-148) handles any unexpected errors.
-      // We verify the structure is correct by confirming successful completion.
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("Error during backup and zipping process"),
+      );
       expect(logger.info).toHaveBeenCalledWith("Backup completed successfully");
+    });
+
+    it("should log an error when the scheduled backup rejects", async () => {
+      // backupAndZip builds its filename prefix with moment().tz(...) BEFORE
+      // entering its own try block, so a clock failure there escapes
+      // backupAndZip's internal catch and reaches the cron callback's catch.
+      const momentMock = require("moment-timezone");
+      const instance = momentMock();
+      const originalTz = instance.tz;
+      instance.tz = jest.fn(() => {
+        throw new Error("clock unavailable");
+      });
+
+      try {
+        cronBackup();
+        const scheduledCb = mockSchedule.mock.calls[0][1];
+        await scheduledCb();
+      } finally {
+        instance.tz = originalTz;
+      }
+
+      expect(logger.error).toHaveBeenCalledWith(
+        "Error during cron backup: clock unavailable",
+      );
+      expect(logger.info).not.toHaveBeenCalledWith(
+        "Backup completed successfully",
+      );
+    });
+
+    it("should fall back to the default expression when BACKUP_SCHEDULER is unset", () => {
+      const saved = process.env.BACKUP_SCHEDULER;
+      delete process.env.BACKUP_SCHEDULER;
+
+      try {
+        // cronExp is read at module load, so the module must be re-required
+        // with the variable absent.
+        jest.isolateModules(() => {
+          const {
+            cronBackup: freshCronBackup,
+          } = require("../../middlewares/backup.middleware");
+          const {
+            logger: freshLogger,
+          } = require("../../middlewares/activityLog.middleware");
+
+          freshCronBackup();
+
+          // NOTE: the announcement is driven by `cronExp !== "0 0 * * *"`,
+          // which is true when cronExp is undefined — so an unset variable is
+          // reported as a custom expression. Cosmetic only; the schedule below
+          // is still the correct default.
+          expect(freshLogger.info).toHaveBeenCalledWith(
+            "You set cron expression as undefined",
+          );
+        });
+      } finally {
+        if (saved === undefined) {
+          delete process.env.BACKUP_SCHEDULER;
+        } else {
+          process.env.BACKUP_SCHEDULER = saved;
+        }
+      }
+
+      expect(mockSchedule).toHaveBeenCalledWith(
+        "0 0 * * *",
+        expect.any(Function),
+      );
     });
   });
 });

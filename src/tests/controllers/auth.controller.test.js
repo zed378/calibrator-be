@@ -301,7 +301,7 @@ describe("authController", () => {
   describe("justUpdatePassword", () => {
     it("should update password successfully", async () => {
       req.user = { id: "user-1" };
-      req.body = { newPassword: "NewPass123" };
+      req.body = { newPassword: "NewPass123", currentPassword: "OldPass123" };
 
       authService.justUpdatePassword.mockResolvedValue({
         success: true,
@@ -311,9 +311,11 @@ describe("authController", () => {
 
       await authController.justUpdatePassword(req, res);
 
+      // The current password must be forwarded so the service can re-authenticate.
       expect(authService.justUpdatePassword).toHaveBeenCalledWith(
         "user-1",
         "NewPass123",
+        "OldPass123",
       );
       expect(success).toHaveBeenCalled();
     });
@@ -423,56 +425,91 @@ describe("authController", () => {
     });
   });
 
+  // These handlers used to be DEFINED TWICE in auth.controller.js. The second
+  // (mfaService-backed) block silently shadowed the authService-backed ones,
+  // and its loginMfa was a stub that always threw 501 — so MFA login could
+  // never work. The duplicates are gone; these tests target the live,
+  // authService-backed handlers.
   describe("setupMfa", () => {
-    it("should generate MFA secret and QR code successfully", async () => {
-      const mfaService = require("../../services/mfa.service");
-      mfaService.generateSecret.mockResolvedValue({
+    it("should generate the MFA secret via authService", async () => {
+      authService.setupMfa.mockResolvedValue({
         secret: "JBSWY3DPEHPK3PXP",
         qrCodeDataUrl: "data:image/png;base64,iVBOR...",
       });
 
       await authController.setupMfa(req, res);
 
-      expect(mfaService.generateSecret).toHaveBeenCalledWith(req.user);
-      expect(success).toHaveBeenCalled();
-      const callArgs = success.mock.calls[0];
-      expect(callArgs[1]).toEqual({
-        qrCodeDataUrl: "data:image/png;base64,iVBOR...",
-      });
+      expect(authService.setupMfa).toHaveBeenCalledWith(req.user.id);
+      expect(success).toHaveBeenCalledWith(
+        res,
+        expect.objectContaining({ secret: "JBSWY3DPEHPK3PXP" }),
+        null,
+        "MFA secret generated",
+        200,
+      );
     });
   });
 
   describe("verifyMfaSetup", () => {
-    it("should verify MFA setup successfully", async () => {
-      const mfaService = require("../../services/mfa.service");
-      req.body = { token: "123456" };
-      mfaService.verifyAndEnable.mockResolvedValue(true);
+    it("should verify the setup code via authService", async () => {
+      req.body = { code: "123456" };
+      authService.verifyMfaSetup.mockResolvedValue({ message: "MFA enabled" });
 
       await authController.verifyMfaSetup(req, res);
 
-      expect(mfaService.verifyAndEnable).toHaveBeenCalledWith(
-        req.user,
+      expect(authService.verifyMfaSetup).toHaveBeenCalledWith(
+        req.user.id,
         "123456",
       );
-      expect(success).toHaveBeenCalled();
+      expect(success).toHaveBeenCalledWith(res, null, null, "MFA enabled", 200);
     });
 
-    it("should return 400 when token is missing", async () => {
+    it("should return 400 when the code is missing", async () => {
       req.body = {};
 
       await authController.verifyMfaSetup(req, res);
 
-      expect(error).toHaveBeenCalled();
+      expect(authService.verifyMfaSetup).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith(res, "MFA code is required", 400);
+    });
+
+    it("should map an invalid code to 400", async () => {
+      req.body = { code: "000000" };
+      authService.verifyMfaSetup.mockRejectedValue(new Error("Invalid MFA code"));
+
+      await authController.verifyMfaSetup(req, res);
+
+      expect(error).toHaveBeenCalledWith(res, "Invalid MFA code", 400);
     });
   });
 
   describe("loginMfa", () => {
-    it("should return 501 because MFA login flow is not fully implemented", async () => {
+    const { verifyAccessToken } = require("../../utils/jwt.util");
+
+    it("should complete the MFA login and issue a session", async () => {
       req.body = { code: "123456", token: "temp-mfa-token" };
+      verifyAccessToken.mockReturnValue({ id: "user-1", mfaRequired: true });
+      authService.loginMfa.mockResolvedValue({
+        data: { id: "user-1" },
+        token: "jwt",
+        session: { id: "sess-1" },
+      });
 
       await authController.loginMfa(req, res);
 
-      expect(error).toHaveBeenCalled();
+      expect(verifyAccessToken).toHaveBeenCalledWith("temp-mfa-token");
+      expect(authService.loginMfa).toHaveBeenCalledWith(
+        "user-1",
+        "123456",
+        req.ip,
+        req.headers["user-agent"],
+      );
+      expect(login).toHaveBeenCalledWith(
+        res,
+        { id: "user-1" },
+        "jwt",
+        { id: "sess-1" },
+      );
     });
 
     it("should return 400 when both code and token are missing", async () => {
@@ -480,7 +517,71 @@ describe("authController", () => {
 
       await authController.loginMfa(req, res);
 
-      expect(error).toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith(
+        res,
+        "MFA code and temporary token are required",
+        400,
+      );
+      expect(authService.loginMfa).not.toHaveBeenCalled();
+    });
+
+    it("should return 400 when only the code is supplied", async () => {
+      req.body = { code: "123456" };
+
+      await authController.loginMfa(req, res);
+
+      expect(error).toHaveBeenCalledWith(
+        res,
+        "MFA code and temporary token are required",
+        400,
+      );
+    });
+
+    it("should return 401 for an unverifiable temporary token", async () => {
+      req.body = { code: "123456", token: "bad" };
+      verifyAccessToken.mockImplementation(() => {
+        throw new Error("jwt malformed");
+      });
+
+      await authController.loginMfa(req, res);
+
+      expect(error).toHaveBeenCalledWith(
+        res,
+        "Invalid or expired login token",
+        401,
+      );
+      expect(authService.loginMfa).not.toHaveBeenCalled();
+    });
+
+    it("should return 401 when the token is not an MFA-stage token", async () => {
+      req.body = { code: "123456", token: "full-token" };
+      // A normal access token has no mfaRequired flag.
+      verifyAccessToken.mockReturnValue({ id: "user-1" });
+
+      await authController.loginMfa(req, res);
+
+      expect(error).toHaveBeenCalledWith(res, "Invalid token payload", 401);
+      expect(authService.loginMfa).not.toHaveBeenCalled();
+    });
+
+    it("should return 401 when the token carries no user id", async () => {
+      req.body = { code: "123456", token: "t" };
+      verifyAccessToken.mockReturnValue({ mfaRequired: true });
+
+      await authController.loginMfa(req, res);
+
+      expect(error).toHaveBeenCalledWith(res, "Invalid token payload", 401);
+    });
+
+    it("should map an invalid MFA code to 401", async () => {
+      req.body = { code: "000000", token: "temp-mfa-token" };
+      verifyAccessToken.mockReturnValue({ id: "user-1", mfaRequired: true });
+      authService.loginMfa.mockRejectedValue(new Error("Invalid MFA code"));
+
+      await authController.loginMfa(req, res);
+
+      expect(error).toHaveBeenCalledWith(res, "Invalid MFA code", 401);
+      expect(login).not.toHaveBeenCalled();
     });
   });
 

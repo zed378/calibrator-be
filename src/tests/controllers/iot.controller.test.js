@@ -11,7 +11,7 @@ jest.mock("../../services/iot.service", () => ({
 }));
 
 jest.mock("../../utils/response.util", () => ({
-  success: jest.fn((msg, data) => ({ success: true, data, message: msg })),
+  success: jest.fn(),
   error: jest.fn(),
 }));
 
@@ -42,7 +42,20 @@ describe("iotController", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     _mocks.mockFindOne.mockReset();
-    success.mockImplementation((msg, data) => ({ success: true, data, message: msg }));
+    success.mockImplementation(
+      (res, data = null, metaOrMessage = null, messageOrStatusCode = null, statusCode = 200) => {
+        let message = "success";
+        let status = 200;
+        if (typeof metaOrMessage === "string") {
+          message = metaOrMessage;
+          status = typeof messageOrStatusCode === "number" ? messageOrStatusCode : statusCode;
+        } else {
+          message = typeof messageOrStatusCode === "string" ? messageOrStatusCode : "success";
+          status = statusCode;
+        }
+        res.status(status).json({ success: true, status, message, data });
+      },
+    );
     req = {
       headers: {},
       body: {},

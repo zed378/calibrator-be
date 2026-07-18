@@ -3,7 +3,18 @@
  *
  * Tests the user route registrations and middleware chain.
  */
+const EventEmitter = require("events");
+
+// The route file passes `resolveResourceId` callbacks into recordAudit. They
+// only run when the real middleware fires on response finish, so keep
+// auditLog.middleware UNMOCKED and stub what it writes through instead —
+// mocking recordAudit would leave those callbacks uncovered.
+jest.mock("../../services/audit.service", () => ({
+  logAction: jest.fn().mockResolvedValue(undefined),
+}));
+
 const userRoutes = require("../../routes/api/user.route");
+const auditService = require("../../services/audit.service");
 
 describe("User Routes", () => {
   it("should export an Express router", () => {
@@ -106,5 +117,135 @@ describe("User Routes", () => {
       return p && p.includes("avatar");
     });
     expect(avatarLayers.length).toBeGreaterThan(0);
+  });
+
+  // --------------------------------------------------------------------
+  // Audit trail (FDA 21 CFR Part 11 §11.10(e)). The recordAudit middleware
+  // is driven off the route stack so the route's own resolveResourceId
+  // callbacks actually execute.
+  // --------------------------------------------------------------------
+  describe("recordAudit resource resolution", () => {
+    /** The recordAudit layer registered on a given route path. */
+    const auditLayerFor = (path, method) => {
+      const layer = userRoutes.stack.find(
+        (l) => l.route && l.route.path === path && l.route.methods[method],
+      );
+      // recordAudit returns an anonymous middleware; it is the one that
+      // subscribes to res "finish".
+      return layer?.route.stack.map((s) => s.handle);
+    };
+
+    /**
+     * Invoke every handler on the route so the recordAudit layer subscribes to
+     * "finish", then emit it.
+     *
+     * The other layers (auth, dynamicAccess) run too and will reject the fake
+     * request — that is fine and intentional, but they need a res that answers
+     * status()/json(), otherwise they throw before recordAudit is reached.
+     */
+    const fireAudit = async (path, method, req, statusCode = 200) => {
+      const handles = auditLayerFor(path, method) || [];
+      const res = new EventEmitter();
+      res.statusCode = statusCode;
+      res.status = jest.fn().mockReturnValue(res);
+      res.json = jest.fn().mockReturnValue(res);
+      res.send = jest.fn().mockReturnValue(res);
+      res.setHeader = jest.fn().mockReturnValue(res);
+      res.getHeader = jest.fn();
+
+      for (const h of handles) {
+        try {
+          h(req, res, () => {});
+        } catch {
+          /* a non-audit layer rejecting the stub request */
+        }
+      }
+      res.emit("finish");
+      // logAction is fired without await inside the finish handler.
+      await new Promise((r) => setImmediate(r));
+      return res;
+    };
+
+    beforeEach(() => jest.clearAllMocks());
+
+    it("resolves the UPDATE resource id from body.userId", async () => {
+      await fireAudit("/role-update", "post", {
+        headers: {},
+        query: {},
+        params: {},
+        body: { userId: "user-42" },
+        user: { id: "actor-1", tenantId: "tenant-1" },
+      });
+
+      expect(auditService.logAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "UPDATE",
+          resourceType: "User",
+          resourceId: "user-42",
+        }),
+      );
+    });
+
+    it("resolves the DELETE resource id from query.userId", async () => {
+      await fireAudit("/delete", "delete", {
+        headers: {},
+        params: {},
+        query: { userId: "user-99" },
+        body: {},
+        user: { id: "actor-1", tenantId: "tenant-1" },
+      });
+
+      expect(auditService.logAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "DELETE",
+          resourceId: "user-99",
+        }),
+      );
+    });
+
+    it("falls back to body.userId when DELETE has no query id", async () => {
+      await fireAudit("/delete", "delete", {
+        headers: {},
+        params: {},
+        query: {},
+        body: { userId: "user-77" },
+        user: { id: "actor-1", tenantId: "tenant-1" },
+      });
+
+      expect(auditService.logAction).toHaveBeenCalledWith(
+        expect.objectContaining({ resourceId: "user-77" }),
+      );
+    });
+
+    it("records a null resource id when neither is supplied", async () => {
+      await fireAudit("/delete", "delete", {
+        headers: {},
+        params: {},
+        query: {},
+        body: {},
+        user: { id: "actor-1", tenantId: "tenant-1" },
+      });
+
+      expect(auditService.logAction).toHaveBeenCalledWith(
+        expect.objectContaining({ resourceId: null }),
+      );
+    });
+
+    it("does not record an audit row for a failed request", async () => {
+      await fireAudit(
+        "/delete",
+        "delete",
+        {
+          headers: {},
+          params: {},
+          query: { userId: "user-99" },
+          body: {},
+          user: { id: "a" },
+        },
+        400,
+      );
+
+      expect(auditService.logAction).not.toHaveBeenCalled();
+    });
   });
 });

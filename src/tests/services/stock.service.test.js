@@ -740,6 +740,30 @@ describe("stock.service", () => {
       );
     });
 
+    it("records the approver when cancelling, but not when moving to in_transit", async () => {
+      const tx1 = mockTransaction();
+      db.transaction.mockResolvedValueOnce(tx1);
+      const cancelled = { id: "tf-1", status: "pending", update: jest.fn().mockResolvedValue() };
+      StockTransfer.findOne.mockResolvedValueOnce(cancelled);
+
+      await updateTransferStatus("tenant-1", "tf-1", { status: "cancelled" }, "usr-1");
+      expect(cancelled.update).toHaveBeenCalledWith(
+        { status: "cancelled", approvedBy: "usr-1" },
+        { transaction: tx1 },
+      );
+
+      const tx2 = mockTransaction();
+      db.transaction.mockResolvedValueOnce(tx2);
+      const inTransit = { id: "tf-2", status: "pending", update: jest.fn().mockResolvedValue() };
+      StockTransfer.findOne.mockResolvedValueOnce(inTransit);
+
+      await updateTransferStatus("tenant-1", "tf-2", { status: "in_transit" }, "usr-1");
+      expect(inTransit.update).toHaveBeenCalledWith(
+        { status: "in_transit", approvedBy: null },
+        { transaction: tx2 },
+      );
+    });
+
     it("should throw 400 on complete status if source stock is missing/insufficient", async () => {
       const tx = mockTransaction();
       db.transaction.mockResolvedValueOnce(tx);
@@ -1067,6 +1091,233 @@ describe("stock.service", () => {
     it("should propagate error on failure", async () => {
       Stock.findAll = jest.fn().mockRejectedValueOnce(new Error("Database error"));
       await expectRejectsWithMessage(exportInventoryCsv("tenant-1"), "Database error");
+    });
+  });
+
+  // ================================================================
+  // Optional-field defaults
+  // ================================================================
+  describe("optional field defaults", () => {
+    it("updateStock keeps the existing itemName when none is supplied", async () => {
+      const tx = mockTransaction();
+      db.transaction.mockResolvedValueOnce(tx);
+      const stock = {
+        id: "st-1",
+        itemName: "Existing Item",
+        sku: "SKU-1",
+        serialNumber: "SN-1",
+        quantity: 5,
+        minQuantity: 1,
+        description: "desc",
+        update: jest.fn().mockResolvedValue(),
+      };
+      Stock.findOne.mockResolvedValueOnce(stock);
+
+      await updateStock("tenant-1", "st-1", { quantity: 9 });
+
+      expect(stock.update).toHaveBeenCalledWith(
+        {
+          itemName: "Existing Item",
+          sku: "SKU-1",
+          serialNumber: "SN-1",
+          quantity: 9,
+          minQuantity: 1,
+          description: "desc",
+        },
+        { transaction: tx },
+      );
+    });
+
+    it("createTransfer defaults notes to null when omitted", async () => {
+      const tx = mockTransaction();
+      db.transaction.mockResolvedValueOnce(tx);
+      Warehouse.findOne.mockResolvedValueOnce({ id: "wh-1" });
+      Warehouse.findOne.mockResolvedValueOnce({ id: "wh-2" });
+      Stock.findOne.mockResolvedValueOnce({ id: "st-1", quantity: 10 });
+      StockTransfer.create.mockResolvedValueOnce({ id: "tf-1" });
+
+      await createTransfer(
+        "tenant-1",
+        { fromWarehouseId: "wh-1", toWarehouseId: "wh-2", itemName: "Item 1", quantity: 5 },
+        "usr-1",
+      );
+
+      expect(StockTransfer.create).toHaveBeenCalledWith(
+        expect.objectContaining({ notes: null, status: "pending", requestedBy: "usr-1" }),
+        { transaction: tx },
+      );
+    });
+
+    it("createOpname defaults notes to null when omitted", async () => {
+      const tx = mockTransaction();
+      db.transaction.mockResolvedValueOnce(tx);
+      Warehouse.findOne.mockResolvedValueOnce({ id: "wh-1" });
+      StockOpname.create.mockResolvedValueOnce({ id: "op-1" });
+      const scheduledAt = new Date();
+
+      await createOpname("tenant-1", { warehouseId: "wh-1", scheduledAt }, "usr-1");
+
+      expect(StockOpname.create).toHaveBeenCalledWith(
+        {
+          tenantId: "tenant-1",
+          warehouseId: "wh-1",
+          status: "draft",
+          scheduledAt,
+          performedBy: "usr-1",
+          notes: null,
+        },
+        { transaction: tx },
+      );
+    });
+
+    it("updateOpnameStatus stamps completedAt only when completing", async () => {
+      const tx1 = mockTransaction();
+      db.transaction.mockResolvedValueOnce(tx1);
+      const completing = { id: "op-1", status: "in_progress", update: jest.fn().mockResolvedValue() };
+      StockOpname.findOne.mockResolvedValueOnce(completing);
+
+      await updateOpnameStatus("tenant-1", "op-1", { status: "completed" }, "usr-1");
+      expect(completing.update).toHaveBeenCalledWith(
+        { status: "completed", completedAt: expect.any(Date) },
+        { transaction: tx1 },
+      );
+
+      const tx2 = mockTransaction();
+      db.transaction.mockResolvedValueOnce(tx2);
+      const progressing = { id: "op-2", status: "draft", update: jest.fn().mockResolvedValue() };
+      StockOpname.findOne.mockResolvedValueOnce(progressing);
+
+      await updateOpnameStatus("tenant-1", "op-2", { status: "in_progress" }, "usr-1");
+      expect(progressing.update).toHaveBeenCalledWith(
+        { status: "in_progress", completedAt: null },
+        { transaction: tx2 },
+      );
+    });
+  });
+
+  // ================================================================
+  // A transaction that has already finished must never be rolled back.
+  // Sequelize sets `finished = "commit"` as part of commit(), so a commit that
+  // then fails leaves a finished transaction — rolling it back would throw
+  // "Transaction cannot be rolled back because it has been finished".
+  // ================================================================
+  describe("no rollback after the transaction has finished", () => {
+    const failingCommitTransaction = () => {
+      const tx = {
+        rollback: jest.fn().mockResolvedValue(),
+        commit: jest.fn(async () => {
+          tx.finished = "commit";
+          throw new Error("Commit failed");
+        }),
+      };
+      return tx;
+    };
+
+    it("createStock does not roll back when commit fails", async () => {
+      const tx = failingCommitTransaction();
+      db.transaction.mockResolvedValueOnce(tx);
+      Warehouse.findOne.mockResolvedValueOnce({ id: "wh-1" });
+      Stock.create.mockResolvedValueOnce({ id: "st-1" });
+
+      await expectRejectsWithMessage(
+        createStock("tenant-1", { warehouseId: "wh-1", itemName: "Item" }),
+        "Commit failed",
+      );
+      expect(tx.rollback).not.toHaveBeenCalled();
+    });
+
+    it("updateStock does not roll back when commit fails", async () => {
+      const tx = failingCommitTransaction();
+      db.transaction.mockResolvedValueOnce(tx);
+      Stock.findOne.mockResolvedValueOnce({ id: "st-1", update: jest.fn().mockResolvedValue() });
+
+      await expectRejectsWithMessage(
+        updateStock("tenant-1", "st-1", { itemName: "New" }),
+        "Commit failed",
+      );
+      expect(tx.rollback).not.toHaveBeenCalled();
+    });
+
+    it("createAdjustment does not roll back when commit fails", async () => {
+      const tx = failingCommitTransaction();
+      db.transaction.mockResolvedValueOnce(tx);
+      Stock.findOne.mockResolvedValueOnce({
+        id: "st-1",
+        quantity: 10,
+        warehouseId: "wh-1",
+        update: jest.fn().mockResolvedValue(),
+      });
+      StockAdjustment.create.mockResolvedValueOnce({ id: "adj-1" });
+
+      await expectRejectsWithMessage(
+        createAdjustment("tenant-1", { stockId: "st-1", type: "addition", quantity: 2 }, "usr-1"),
+        "Commit failed",
+      );
+      expect(tx.rollback).not.toHaveBeenCalled();
+    });
+
+    it("createTransfer does not roll back when commit fails", async () => {
+      const tx = failingCommitTransaction();
+      db.transaction.mockResolvedValueOnce(tx);
+      Warehouse.findOne.mockResolvedValueOnce({ id: "wh-1" });
+      Warehouse.findOne.mockResolvedValueOnce({ id: "wh-2" });
+      Stock.findOne.mockResolvedValueOnce({ id: "st-1", quantity: 10 });
+      StockTransfer.create.mockResolvedValueOnce({ id: "tf-1" });
+
+      await expectRejectsWithMessage(
+        createTransfer(
+          "tenant-1",
+          { fromWarehouseId: "wh-1", toWarehouseId: "wh-2", itemName: "Item", quantity: 5 },
+          "usr-1",
+        ),
+        "Commit failed",
+      );
+      expect(tx.rollback).not.toHaveBeenCalled();
+    });
+
+    it("updateTransferStatus does not roll back when commit fails", async () => {
+      const tx = failingCommitTransaction();
+      db.transaction.mockResolvedValueOnce(tx);
+      StockTransfer.findOne.mockResolvedValueOnce({
+        id: "tf-1",
+        status: "pending",
+        update: jest.fn().mockResolvedValue(),
+      });
+
+      await expectRejectsWithMessage(
+        updateTransferStatus("tenant-1", "tf-1", { status: "in_transit" }, "usr-1"),
+        "Commit failed",
+      );
+      expect(tx.rollback).not.toHaveBeenCalled();
+    });
+
+    it("createOpname does not roll back when commit fails", async () => {
+      const tx = failingCommitTransaction();
+      db.transaction.mockResolvedValueOnce(tx);
+      Warehouse.findOne.mockResolvedValueOnce({ id: "wh-1" });
+      StockOpname.create.mockResolvedValueOnce({ id: "op-1" });
+
+      await expectRejectsWithMessage(
+        createOpname("tenant-1", { warehouseId: "wh-1", scheduledAt: new Date() }, "usr-1"),
+        "Commit failed",
+      );
+      expect(tx.rollback).not.toHaveBeenCalled();
+    });
+
+    it("updateOpnameStatus does not roll back when commit fails", async () => {
+      const tx = failingCommitTransaction();
+      db.transaction.mockResolvedValueOnce(tx);
+      StockOpname.findOne.mockResolvedValueOnce({
+        id: "op-1",
+        status: "draft",
+        update: jest.fn().mockResolvedValue(),
+      });
+
+      await expectRejectsWithMessage(
+        updateOpnameStatus("tenant-1", "op-1", { status: "in_progress" }, "usr-1"),
+        "Commit failed",
+      );
+      expect(tx.rollback).not.toHaveBeenCalled();
     });
   });
 });

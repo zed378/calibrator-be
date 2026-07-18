@@ -33,6 +33,8 @@ jest.mock("../../services/emailQueue.service", () => ({
 }));
 
 const svc = require("../../services/customDomains.service");
+const { AppError } = require("../../utils/appError.util");
+const { logger } = require("../../middlewares/activityLog.middleware");
 const { CustomDomain, User } = require("../../models");
 const { emailQueueService } = require("../../services/emailQueue.service");
 
@@ -63,6 +65,7 @@ describe("customDomainsService", () => {
     process.env.CUSTOM_DOMAINS_ENABLED = "true";
     process.env.DEFAULT_SUBDOMAIN = "app";
     process.env.TLS_AUTO_PROVISION = "false";
+    delete process.env.DNS_CHECK_INTERVAL;
     CustomDomain.findOne.mockResolvedValue(null);
     CustomDomain.findAll.mockResolvedValue([]);
     CustomDomain.update.mockResolvedValue([1]);
@@ -137,6 +140,69 @@ describe("customDomainsService", () => {
       CustomDomain.create.mockRejectedValueOnce(new Error("DB"));
       await expect(svc.addDomain("tenant-1", "app.example.com")).rejects.toMatchObject({ status: 500 });
     });
+
+    it("re-throws an AppError unchanged rather than masking it as a 500", async () => {
+      CustomDomain.create.mockRejectedValueOnce(new AppError(422, "Quota exceeded"));
+
+      await expect(svc.addDomain("tenant-1", "app.example.com")).rejects.toMatchObject({
+        status: 422,
+        message: "Quota exceeded",
+      });
+    });
+
+    it("defaults type to 'subdomain' and sslEnabled to true for a bare object input", async () => {
+      await svc.addDomain("tenant-1", { domain: "app.example.com" });
+
+      expect(CustomDomain.create).toHaveBeenCalledWith(
+        expect.objectContaining({ domainType: "subdomain", sslEnabled: true }),
+      );
+    });
+
+    it("honours sslEnabled:false", async () => {
+      await svc.addDomain("tenant-1", { domain: "app.example.com", sslEnabled: false });
+
+      expect(CustomDomain.create).toHaveBeenCalledWith(
+        expect.objectContaining({ sslEnabled: false }),
+      );
+    });
+
+    it("still adds the domain when the tenant has no admin user to notify", async () => {
+      User.findOne.mockResolvedValueOnce(null);
+
+      const res = await svc.addDomain("tenant-1", "app.example.com");
+
+      expect(res.id).toBe("d-1");
+      expect(emailQueueService.queueEmail).not.toHaveBeenCalled();
+    });
+
+    it("still adds the domain when the admin user has no email address", async () => {
+      User.findOne.mockResolvedValueOnce({ id: "u-1", email: null });
+
+      const res = await svc.addDomain("tenant-1", "app.example.com");
+
+      expect(res.id).toBe("d-1");
+      expect(emailQueueService.queueEmail).not.toHaveBeenCalled();
+    });
+
+    it("still adds the domain when queueing the verification email fails", async () => {
+      emailQueueService.queueEmail.mockRejectedValueOnce(new Error("queue down"));
+
+      const res = await svc.addDomain("tenant-1", "app.example.com");
+
+      expect(res.id).toBe("d-1");
+      expect(logger.warn).toHaveBeenCalledWith(
+        "Failed to send verification email",
+        expect.objectContaining({ error: "queue down" }),
+      );
+    });
+
+    it("advertises Let's Encrypt auto-provisioning in the instructions when TLS auto-provision is on", async () => {
+      process.env.TLS_AUTO_PROVISION = "true";
+
+      const res = await svc.addDomain("tenant-1", "app.example.com");
+
+      expect(res.verification.instructions[3]).toContain("auto-provisioned");
+    });
   });
 
   describe("verifyDomain", () => {
@@ -161,6 +227,31 @@ describe("customDomainsService", () => {
       CustomDomain.findOne.mockResolvedValueOnce(null);
       await expect(svc.verifyDomain("tenant-1", "missing")).rejects.toMatchObject({ status: 404 });
     });
+
+    it("generates a token when the record has none stored", async () => {
+      const rec = makeRecord({ verificationToken: null });
+      CustomDomain.findOne.mockResolvedValueOnce(rec);
+
+      const res = await svc.verifyDomain("tenant-1", "d-1");
+
+      expect(res.verified).toBe(true);
+      expect(res.record).toMatch(/^callibrator-verify=[0-9a-f]{32}$/);
+      expect(res.dnsRecord.name).toBe("_domain_verify.app.example.com");
+    });
+
+    it("reports the reason when persisting the verification result fails", async () => {
+      const rec = makeRecord();
+      rec.update.mockRejectedValueOnce(new Error("write failed"));
+      CustomDomain.findOne.mockResolvedValueOnce(rec);
+
+      const res = await svc.verifyDomain("tenant-1", "d-1");
+
+      expect(res).toEqual({ verified: false, reason: "write failed" });
+      expect(logger.error).toHaveBeenCalledWith(
+        "Domain verification failed",
+        expect.objectContaining({ domainId: "d-1", error: "write failed" }),
+      );
+    });
   });
 
   describe("removeDomain", () => {
@@ -176,6 +267,22 @@ describe("customDomainsService", () => {
     });
     it("400s when args are missing", async () => {
       await expect(svc.removeDomain(null, "d-1")).rejects.toMatchObject({ status: 400 });
+      await expect(svc.removeDomain("tenant-1", null)).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("500s when the soft-delete write fails", async () => {
+      const rec = makeRecord();
+      rec.update.mockRejectedValueOnce(new Error("write failed"));
+      CustomDomain.findOne.mockResolvedValueOnce(rec);
+
+      await expect(svc.removeDomain("tenant-1", "d-1")).rejects.toMatchObject({
+        status: 500,
+        message: "Failed to remove domain",
+      });
+      expect(logger.error).toHaveBeenCalledWith(
+        "Failed to remove domain",
+        expect.objectContaining({ error: "write failed" }),
+      );
     });
   });
 
@@ -214,6 +321,37 @@ describe("customDomainsService", () => {
       const res = await svc.getDnsRecords("tenant-1", "d-1");
       expect(res.verification.type).toBe("TXT");
       expect(res.cname.type).toBe("CNAME");
+      expect(res.verification.value).toBe("callibrator-verify=abc123");
+    });
+
+    it("shows a [TOKEN] placeholder when the record has no verification token", async () => {
+      CustomDomain.findOne.mockResolvedValueOnce(makeRecord({ verificationToken: null }));
+
+      const res = await svc.getDnsRecords("tenant-1", "d-1");
+
+      expect(res.verification.value).toBe("callibrator-verify=[TOKEN]");
+    });
+  });
+
+  describe("getDomainByDomain", () => {
+    it("returns the matching non-deleted record", async () => {
+      const rec = makeRecord({ status: "active" });
+      CustomDomain.findOne.mockResolvedValueOnce(rec);
+
+      expect(await svc.getDomainByDomain("app.example.com")).toBe(rec);
+      expect(CustomDomain.findOne).toHaveBeenCalledWith({
+        where: { domain: "app.example.com", status: { ne_symbol: "deleted" } },
+      });
+    });
+
+    it("returns null when the lookup fails", async () => {
+      CustomDomain.findOne.mockRejectedValueOnce(new Error("db down"));
+
+      expect(await svc.getDomainByDomain("app.example.com")).toBeNull();
+      expect(logger.error).toHaveBeenCalledWith(
+        "Failed to get domain",
+        expect.objectContaining({ error: "db down" }),
+      );
     });
   });
 
@@ -232,6 +370,16 @@ describe("customDomainsService", () => {
     it("returns null on miss", async () => {
       expect(await svc.resolveTenantByDomain("nope.com")).toBeNull();
     });
+
+    it("returns null (does not throw) when the lookup fails", async () => {
+      CustomDomain.findOne.mockRejectedValueOnce(new Error("db down"));
+
+      expect(await svc.resolveTenantByDomain("x.com")).toBeNull();
+      expect(logger.error).toHaveBeenCalledWith(
+        "Domain resolution failed",
+        expect.objectContaining({ hostname: "x.com", error: "db down" }),
+      );
+    });
   });
 
   describe("provisionTLSCertificate + status + constants", () => {
@@ -240,15 +388,57 @@ describe("customDomainsService", () => {
       const res = await svc.provisionTLSCertificate("x.com");
       expect(res.success).toBe(true);
     });
+    it("returns the simulated certificate window when enabled", async () => {
+      process.env.TLS_AUTO_PROVISION = "true";
+      const res = await svc.provisionTLSCertificate("x.com");
+
+      expect(res.certificate.domain).toBe("x.com");
+      expect(res.certificate.issuer).toBe("Let's Encrypt (simulated)");
+      const lifetimeMs =
+        new Date(res.certificate.expiresAt) - new Date(res.certificate.issuedAt);
+      expect(Math.round(lifetimeMs / 86400000)).toBe(90);
+    });
+
     it("declines when disabled", async () => {
       process.env.TLS_AUTO_PROVISION = "false";
       const res = await svc.provisionTLSCertificate("x.com");
       expect(res.success).toBe(false);
+      expect(res.reason).toBe("TLS auto-provisioning disabled");
+    });
+
+    it("degrades gracefully instead of throwing if provisioning fails", async () => {
+      process.env.TLS_AUTO_PROVISION = "true";
+      logger.info.mockImplementationOnce(() => {
+        throw new Error("logging backend unavailable");
+      });
+
+      const res = await svc.provisionTLSCertificate("x.com");
+
+      expect(res).toEqual({ success: false, reason: "logging backend unavailable" });
     });
     it("reports status and constants", () => {
-      expect(svc.getStatus()).toMatchObject({ enabled: true, defaultSubdomain: "app" });
+      process.env.DNS_CHECK_INTERVAL = "60";
+      expect(svc.getStatus()).toMatchObject({
+        enabled: true,
+        defaultSubdomain: "app",
+        dnsCheckInterval: 60,
+        tlsAutoProvision: false,
+      });
       expect(svc.DOMAIN_STATUS).toHaveProperty("ACTIVE", "active");
       expect(svc.DOMAIN_TYPE).toHaveProperty("SUBDOMAIN", "subdomain");
+    });
+
+    it("falls back to the built-in subdomain and DNS interval defaults", () => {
+      delete process.env.DEFAULT_SUBDOMAIN;
+      delete process.env.DNS_CHECK_INTERVAL;
+      delete process.env.CUSTOM_DOMAINS_ENABLED;
+
+      expect(svc.getStatus()).toEqual({
+        enabled: false,
+        defaultSubdomain: "app",
+        dnsCheckInterval: 300,
+        tlsAutoProvision: false,
+      });
     });
   });
 });

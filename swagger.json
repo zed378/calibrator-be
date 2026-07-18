@@ -180,6 +180,10 @@
       "description": "Asset finance records and depreciation reporting for calibration devices"
     },
     {
+      "name": "Kanban",
+      "description": "Project-tracker kanban boards (per-project membership, realtime, notifications)"
+    },
+    {
       "name": "Reports",
       "description": "Tenant-scoped analytics and reporting"
     },
@@ -1865,7 +1869,7 @@
         "tags": [
           "Auth"
         ],
-        "summary": "Setup MFA (TOTP)",
+        "summary": "Generate an MFA secret and QR code for the authenticated user",
         "security": [
           {
             "bearerAuth": []
@@ -1883,7 +1887,7 @@
         "tags": [
           "Auth"
         ],
-        "summary": "Verify and enable MFA setup",
+        "summary": "Verify an MFA code to complete the setup process",
         "security": [
           {
             "bearerAuth": []
@@ -1977,7 +1981,43 @@
         "tags": [
           "Auth"
         ],
-        "summary": "Login with MFA token"
+        "summary": "Login with MFA token",
+        "description": "Second step of an MFA login. Takes the temporary token issued by /auth/login plus the current TOTP code, and returns a full session.\n",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code",
+                  "token"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "description": "The 6-digit TOTP code."
+                  },
+                  "token": {
+                    "type": "string",
+                    "description": "The temporary token returned by /auth/login."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Login successful"
+          },
+          "400": {
+            "description": "MFA code and temporary token are required"
+          },
+          "401": {
+            "description": "Invalid MFA code, or invalid/expired login token"
+          }
+        }
       }
     },
     "/api/v1/jobs": {
@@ -6969,6 +7009,75 @@
         }
       }
     },
+    "/api/v1/kanban/projects": {
+      "get": {
+        "summary": "List kanban projects (boards) the caller can access",
+        "tags": [
+          "Kanban"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Projects retrieved"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a kanban project (board)",
+        "tags": [
+          "Kanban"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Project created"
+          }
+        }
+      }
+    },
+    "/api/v1/kanban/projects/{projectId}": {
+      "get": {
+        "summary": "Get a full board (columns, cards, labels, members)",
+        "tags": [
+          "Kanban"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project retrieved"
+          },
+          "403": {
+            "description": "Insufficient access"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
     "/api/v1/maintenance": {
       "get": {
         "summary": "Get all maintenance work orders",
@@ -8935,6 +9044,72 @@
           },
           "404": {
             "description": "Notification not found"
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/all": {
+      "delete": {
+        "summary": "Delete all of the caller's notifications",
+        "description": "Removes every notification visible to the authenticated user (their own plus tenant-wide broadcasts).",
+        "tags": [
+          "Notifications"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Notifications deleted"
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/bulk": {
+      "delete": {
+        "summary": "Delete selected notifications",
+        "description": "Deletes the given notification ids that belong to the caller. Ids outside their scope are ignored.",
+        "tags": [
+          "Notifications"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "ids"
+                ],
+                "properties": {
+                  "ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Notifications deleted"
+          },
+          "400": {
+            "description": "Invalid or empty id list"
+          },
+          "404": {
+            "description": "No matching notifications found"
           }
         }
       }
@@ -18395,6 +18570,56 @@
           },
           "404": {
             "description": "Location not found"
+          }
+        }
+      }
+    },
+    "/api/v1/webauthn/status": {
+      "get": {
+        "summary": "Get WebAuthn enrolment status",
+        "description": "Returns whether the current user has a passkey enrolled.",
+        "tags": [
+          "WebAuthn"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "WebAuthn status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "signCount": {
+                          "type": "integer"
+                        },
+                        "lastUpdatedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "User not found"
           }
         }
       }

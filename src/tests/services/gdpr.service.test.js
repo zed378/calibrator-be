@@ -119,6 +119,19 @@ jest.mock("../../models", () => {
     ConsentRecord: model(),
     DataRetentionPolicy: model({ findAll: jest.fn().mockResolvedValue([]) }),
     DsarRequest: model(),
+    // Plural aliases. src/models/index.js really does export these
+    // (`Stocks: models.Stock`, ...), and exportTenantData looks tables up by
+    // their plural name — without them the export loop silently skips every
+    // table and never exercises its body.
+    Stocks: model(),
+    StockTransfers: model(),
+    StockAdjustments: model(),
+    StockOpnames: model(),
+    CalibrationDevices: model(),
+    CalibrationRecords: model(),
+    Certificates: model(),
+    MaintenanceWorkOrders: model(),
+    Notifications: model(),
   };
 });
 
@@ -220,6 +233,108 @@ describe("gdprService", () => {
       await expect(
         gdprService.exportUserData("tenant-1", "user-1"),
       ).rejects.toThrow("Failed to export user data");
+    });
+
+    it("should reject when the archiver stream emits an error", async () => {
+      // createZipArchive wires `archive.on("error", reject)`; drive that path.
+      // Real timers so the setImmediate below fires on its own.
+      jest.useRealTimers();
+      const archiver = require("archiver");
+      archiver.mockImplementationOnce(() => {
+        const arch = {
+          on: jest.fn((event, cb) => {
+            if (event === "error") {
+              setImmediate(() => cb(new Error("Archiver Error")));
+            }
+            return arch;
+          }),
+          pipe: jest.fn(),
+          directory: jest.fn(),
+          finalize: jest.fn(),
+        };
+        return arch;
+      });
+
+      await expect(
+        gdprService.exportUserData("tenant-1", "user-1"),
+      ).rejects.toThrow("Failed to export user data");
+    });
+
+    it("should export each tenant table and the calibration records of every device", async () => {
+      // Devices present => the `deviceIds.length > 0` arms of exportCalibrationData
+      // run, and the plural-aliased tenant tables are each queried.
+      const {
+        CalibrationDevice,
+        CalibrationRecord,
+        Certificate,
+        Stocks,
+        Notifications,
+      } = require("../../models");
+
+      CalibrationDevice.findAll.mockResolvedValueOnce([{ id: "dev-1" }, { id: "dev-2" }]);
+      CalibrationRecord.findAll.mockResolvedValueOnce([{ id: "rec-1" }]);
+      Certificate.findAll.mockResolvedValueOnce([{ id: "cert-1" }]);
+
+      const resultPromise = gdprService.exportUserData("tenant-1", "user-1");
+      await jest.runAllTimersAsync();
+      const result = await resultPromise;
+
+      expect(result).toHaveProperty("exportId");
+
+      // Tenant tables are looked up by their plural alias and scoped to the tenant.
+      expect(Stocks.findAll).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { tenantId: "tenant-1" }, limit: 1000, raw: true }),
+      );
+      expect(Notifications.findAll).toHaveBeenCalled();
+
+      // Calibration records/certificates are fetched for the collected device ids.
+      expect(CalibrationRecord.findAll).toHaveBeenCalledWith({
+        where: { deviceId: ["dev-1", "dev-2"] },
+        raw: true,
+      });
+      expect(Certificate.findAll).toHaveBeenCalledWith({
+        where: { deviceId: ["dev-1", "dev-2"] },
+        raw: true,
+      });
+    });
+
+    it("should skip a tenant table that is not a registered model", async () => {
+      // exportTenantData guards with `if (Model)` for tables that aren't
+      // registered on the models index. Simulate one going missing.
+      const models = require("../../models");
+      const removed = models.StockOpnames;
+      delete models.StockOpnames;
+
+      try {
+        const resultPromise = gdprService.exportUserData("tenant-1", "user-1");
+        await jest.runAllTimersAsync();
+        const result = await resultPromise;
+
+        expect(result).toHaveProperty("exportId");
+        // Skipped silently — not warned about, and absent from the payload.
+        expect(removed.findAll).not.toHaveBeenCalled();
+        const written = fs.promises.writeFile.mock.calls.find(([p]) =>
+          String(p).endsWith("tenant_data.json"),
+        );
+        expect(Object.keys(JSON.parse(written[1]))).not.toContain("StockOpnames");
+      } finally {
+        models.StockOpnames = removed;
+      }
+    });
+
+    it("should log a warning and continue when a tenant table export fails", async () => {
+      const { Stocks } = require("../../models");
+      const { logger } = require("../../middlewares/activityLog.middleware");
+      Stocks.findAll.mockRejectedValueOnce(new Error("Stocks table gone"));
+
+      const resultPromise = gdprService.exportUserData("tenant-1", "user-1");
+      await jest.runAllTimersAsync();
+      const result = await resultPromise;
+
+      expect(result).toHaveProperty("exportId");
+      expect(logger.warn).toHaveBeenCalledWith("Failed to export Stocks", {
+        error: "Stocks table gone",
+      });
     });
 
     it("should run cleanup on timer expiry and delete files", async () => {
@@ -398,6 +513,22 @@ describe("gdprService", () => {
       expect(result).toEqual({ marketing: false });
     });
 
+    it("should return an empty object when the user has no preferences set", async () => {
+      User.findByPk.mockResolvedValueOnce({ id: "user-1", privacyPreferences: null });
+
+      const result = await gdprService.getPrivacyPreferences("tenant-1", "user-1");
+
+      expect(result).toEqual({});
+    });
+
+    it("should return an empty object when the user does not exist", async () => {
+      User.findByPk.mockResolvedValueOnce(null);
+
+      const result = await gdprService.getPrivacyPreferences("tenant-1", "user-1");
+
+      expect(result).toEqual({});
+    });
+
     it("should return empty object on error", async () => {
       User.findByPk.mockRejectedValue(new Error("db error"));
       const result = await gdprService.getPrivacyPreferences(
@@ -474,6 +605,17 @@ describe("gdprService", () => {
       DsarRequest.findOne.mockRejectedValueOnce(new Error("DB error"));
       const result = await gdprService.getDsarStatus("tenant-1", "nonexistent");
       expect(result).toBeNull();
+    });
+
+    it("should return null when no DSAR matches", async () => {
+      DsarRequest.findOne.mockResolvedValueOnce(undefined);
+
+      const result = await gdprService.getDsarStatus("tenant-1", "nonexistent");
+
+      expect(result).toBeNull();
+      expect(DsarRequest.findOne).toHaveBeenCalledWith({
+        where: { tenantId: "tenant-1", id: "nonexistent" },
+      });
     });
   });
 

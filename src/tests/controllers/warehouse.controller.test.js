@@ -28,10 +28,12 @@ const { success, error } = require("../../utils/response.util");
 describe("warehouseController", () => {
   let req;
   let res;
+  let next;
 
   beforeEach(() => {
     jest.clearAllMocks();
 
+    next = jest.fn();
     req = {
       body: {},
       query: {},
@@ -79,6 +81,29 @@ describe("warehouseController", () => {
         { total: 1, page: 1, limit: 10 },
         "Fetch warehouses successful",
         200,
+      );
+    });
+
+    it("should reject an invalid query without calling the service", async () => {
+      // `status` only accepts active/inactive — this trips the validate() throw.
+      req.query = { status: "archived" };
+
+      await warehouseController.getAllWarehouses(req, res, next);
+
+      expect(warehouseService.fetchWarehouses).not.toHaveBeenCalled();
+      // asyncHandler maps the thrown { status, message } onto response.util.error
+      expect(error).toHaveBeenCalledWith(
+        res,
+        "Validation failed",
+        400,
+        expect.anything(),
+      );
+      expect(next).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 400,
+          message: "Validation failed",
+          errors: expect.any(Array),
+        }),
       );
     });
   });

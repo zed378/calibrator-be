@@ -34,10 +34,12 @@ const { success, error } = require("../../utils/response.util");
 describe("stockController", () => {
   let req;
   let res;
+  let next;
 
   beforeEach(() => {
     jest.clearAllMocks();
 
+    next = jest.fn();
     req = {
       body: {},
       query: {},
@@ -82,6 +84,29 @@ describe("stockController", () => {
         limit: 10,
       });
       expect(success).toHaveBeenCalled();
+    });
+
+    it("should reject an invalid query without calling the service", async () => {
+      // limit max is 100 in getStocksQuery — this trips the validate() throw.
+      req.query = { limit: "500" };
+
+      await stockController.getAllStocks(req, res, next);
+
+      expect(stockService.fetchStocks).not.toHaveBeenCalled();
+      // asyncHandler maps the thrown { status, message } onto response.util.error
+      expect(error).toHaveBeenCalledWith(
+        res,
+        "Validation failed",
+        400,
+        expect.anything(),
+      );
+      expect(next).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 400,
+          message: "Validation failed",
+          errors: expect.any(Array),
+        }),
+      );
     });
   });
 

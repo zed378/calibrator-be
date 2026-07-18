@@ -128,4 +128,76 @@ describe("scim Controller", () => {
       expect(res.status).toHaveBeenCalledWith(204);
     });
   });
+
+  // getUsers/getGroups default startIndex to 1 and count to 100 when the SCIM
+  // client omits them, and tenantId is read through `req.user?.tenantId`.
+  describe("pagination defaults and tenant resolution", () => {
+    it("defaults startIndex to 1 and count to 100 for users", async () => {
+      req.query = {};
+      scimService.getUsers.mockResolvedValue([]);
+      await scimController.getUsers(req, res, next);
+      expect(scimService.getUsers).toHaveBeenCalledWith(
+        "tenant-1",
+        1,
+        100,
+        undefined,
+      );
+    });
+
+    it("coerces startIndex/count strings and forwards the filter for users", async () => {
+      req.query = { startIndex: "3", count: "25", filter: 'userName eq "a"' };
+      scimService.getUsers.mockResolvedValue([]);
+      await scimController.getUsers(req, res, next);
+      expect(scimService.getUsers).toHaveBeenCalledWith(
+        "tenant-1",
+        3,
+        25,
+        'userName eq "a"',
+      );
+    });
+
+    it("defaults startIndex to 1 and count to 100 for groups", async () => {
+      req.query = {};
+      scimService.getGroups.mockResolvedValue([]);
+      await scimController.getGroups(req, res, next);
+      expect(scimService.getGroups).toHaveBeenCalledWith(
+        "tenant-1",
+        1,
+        100,
+        undefined,
+      );
+    });
+
+    it("passes tenantId undefined when req.user is absent", async () => {
+      req.query = {};
+      req.user = undefined;
+      scimService.getGroups.mockResolvedValue([]);
+      await scimController.getGroups(req, res, next);
+      expect(scimService.getGroups).toHaveBeenCalledWith(
+        undefined,
+        1,
+        100,
+        undefined,
+      );
+    });
+  });
+
+  // patchUser/patchGroup fall back to an empty Operations array.
+  describe("patch Operations fallback", () => {
+    it("passes an empty array when the user patch body has no Operations", async () => {
+      req.params = { id: "user-1" };
+      req.body = {};
+      scimService.patchUser.mockResolvedValue({ id: "user-1" });
+      await scimController.patchUser(req, res, next);
+      expect(scimService.patchUser).toHaveBeenCalledWith("tenant-1", "user-1", []);
+    });
+
+    it("passes an empty array when the group patch body has no Operations", async () => {
+      req.params = { id: "group-1" };
+      req.body = {};
+      scimService.patchGroup.mockResolvedValue({ id: "group-1" });
+      await scimController.patchGroup(req, res, next);
+      expect(scimService.patchGroup).toHaveBeenCalledWith("tenant-1", "group-1", []);
+    });
+  });
 });

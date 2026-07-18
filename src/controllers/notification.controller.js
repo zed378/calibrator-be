@@ -5,13 +5,12 @@ const { success } = require("../utils/response.util");
 exports.fetchUserNotifications = asyncHandler(async (req, res) => {
   const { tenantId, id: userId } = req.user;
   const { page, limit, isRead, type } = req.query;
-  const roleName = req.user.role?.name;
-  const isSuperAdmin = roleName === "SUPER_ADMIN" || roleName === "SUPERADMIN";
 
+  // No role-based widening: the feed is the caller's own inbox (see
+  // fetchUserNotifications), which keeps it consistent with mark-read/delete.
   const result = await notificationService.fetchUserNotifications({
     tenantId,
     userId,
-    isSuperAdmin,
     page,
     limit,
     isRead,
@@ -34,6 +33,28 @@ exports.markAllAsRead = asyncHandler(async (req, res) => {
 
   const result = await notificationService.markAllAsRead(tenantId, userId);
   success(res, null, null, result.message, result.status);
+});
+
+exports.deleteAllNotifications = asyncHandler(async (req, res) => {
+  const { tenantId, id: userId } = req.user;
+
+  const result = await notificationService.deleteAllNotifications(
+    tenantId,
+    userId,
+  );
+  success(res, result.data, null, result.message, result.status);
+});
+
+exports.deleteManyNotifications = asyncHandler(async (req, res) => {
+  const { tenantId, id: userId } = req.user;
+  const { ids } = req.body;
+
+  const result = await notificationService.deleteManyNotifications(
+    tenantId,
+    userId,
+    ids,
+  );
+  success(res, result.data, null, result.message, result.status);
 });
 
 exports.deleteNotification = asyncHandler(async (req, res) => {

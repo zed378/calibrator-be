@@ -403,5 +403,207 @@ describe("redis.service", () => {
         })
       );
     });
+
+    it("is a no-op when no connection was ever created", async () => {
+      // Fresh module: `redis` is still null, so quit must not be attempted.
+      jest.resetModules();
+      const fresh = require("../../services/redis.service");
+
+      await expect(fresh.closeRedis()).resolves.toBeUndefined();
+      expect(mockQuit).not.toHaveBeenCalled();
+    });
+  });
+
+  // ================================================================
+  // Coverage: connection URL construction + remaining branches
+  // ================================================================
+  describe("getRedisConnection URL construction", () => {
+    const origEnv = { ...process.env };
+
+    afterEach(() => {
+      process.env = { ...origEnv };
+    });
+
+    it("uses REDIS_URL verbatim when it is set", () => {
+      jest.resetModules();
+      process.env.REDIS_URL = "redis://cache.internal:6380";
+      const Redis = require("ioredis");
+      const fresh = require("../../services/redis.service");
+
+      fresh.getRedisConnection();
+
+      expect(Redis).toHaveBeenCalledWith(
+        "redis://cache.internal:6380",
+        expect.objectContaining({ lazyConnect: true, maxRetriesPerRequest: 3 })
+      );
+    });
+
+    it("builds the URL from REDIS_HOST and REDIS_PORT when REDIS_URL is unset", () => {
+      jest.resetModules();
+      delete process.env.REDIS_URL;
+      process.env.REDIS_HOST = "redis-host";
+      process.env.REDIS_PORT = "6399";
+      const Redis = require("ioredis");
+      const fresh = require("../../services/redis.service");
+
+      fresh.getRedisConnection();
+
+      expect(Redis).toHaveBeenCalledWith(
+        "redis://redis-host:6399",
+        expect.any(Object)
+      );
+    });
+
+    it("falls back to localhost:6379 when no Redis env vars are set", () => {
+      jest.resetModules();
+      delete process.env.REDIS_URL;
+      delete process.env.REDIS_HOST;
+      delete process.env.REDIS_PORT;
+      const Redis = require("ioredis");
+      const fresh = require("../../services/redis.service");
+
+      fresh.getRedisConnection();
+
+      expect(Redis).toHaveBeenCalledWith(
+        "redis://localhost:6379",
+        expect.any(Object)
+      );
+    });
+
+    it("returns the memoized client on a second call", () => {
+      jest.resetModules();
+      const Redis = require("ioredis");
+      const fresh = require("../../services/redis.service");
+
+      const a = fresh.getRedisConnection();
+      const b = fresh.getRedisConnection();
+
+      expect(a).toBe(b);
+      expect(Redis).toHaveBeenCalledTimes(1);
+    });
+
+    it("registers an error handler that logs the connection error", () => {
+      jest.resetModules();
+      const fresh = require("../../services/redis.service");
+      fresh.getRedisConnection();
+
+      expect(mockOnErrorCallback).toBeInstanceOf(Function);
+      mockOnErrorCallback(new Error("ECONNREFUSED"));
+
+      const { logger } = require("../../middlewares/activityLog.middleware");
+      expect(logger.error).toHaveBeenCalledWith({
+        status: "Redis Connection Error",
+        message: "ECONNREFUSED",
+      });
+    });
+
+    it("retries up to 3 times then gives up", () => {
+      jest.resetModules();
+      const Redis = require("ioredis");
+      const fresh = require("../../services/redis.service");
+      fresh.getRedisConnection();
+
+      const { retryStrategy } = Redis.mock.calls[0][1];
+
+      expect(retryStrategy(1)).toBe(200);
+      expect(retryStrategy(3)).toBe(600);
+      // Capped at 1000ms, and null after 3 attempts = stop retrying.
+      expect(retryStrategy(4)).toBeNull();
+    });
+  });
+
+  describe("get value branches", () => {
+    it("returns a parsed object for JSON payloads", async () => {
+      mockGet.mockResolvedValue('{"id":"u1","active":true}');
+
+      await expect(redisService.get("user:u1")).resolves.toEqual({
+        id: "u1",
+        active: true,
+      });
+    });
+
+    it("returns the raw string when the payload is not JSON", async () => {
+      mockGet.mockResolvedValue("not-json-at-all");
+
+      await expect(redisService.get("k")).resolves.toBe("not-json-at-all");
+    });
+
+    it("returns null for an empty-string payload", async () => {
+      mockGet.mockResolvedValue("");
+
+      await expect(redisService.get("k")).resolves.toBeNull();
+    });
+  });
+
+  describe("delPattern batch branches", () => {
+    it("returns 0 and issues no DEL when the scan finds no keys", async () => {
+      mockScan.mockResolvedValue(["0", []]);
+
+      await expect(redisService.delPattern("user:*")).resolves.toBe(0);
+      expect(mockDel).not.toHaveBeenCalled();
+    });
+
+    it("walks every cursor page and sums the deletions", async () => {
+      mockScan
+        .mockResolvedValueOnce(["17", ["user:1", "user:2"]])
+        .mockResolvedValueOnce(["42", []]) // an empty middle page must not stop the walk
+        .mockResolvedValueOnce(["0", ["user:3"]]);
+
+      await expect(redisService.delPattern("user:*")).resolves.toBe(3);
+      expect(mockScan).toHaveBeenCalledTimes(3);
+      expect(mockDel).toHaveBeenCalledWith("user:1", "user:2");
+      expect(mockDel).toHaveBeenCalledWith("user:3");
+    });
+  });
+
+  describe("acquireLock result branches", () => {
+    it("returns null when the lock is already held (SET NX returns null)", async () => {
+      mockSet.mockResolvedValue(null);
+
+      await expect(redisService.acquireLock("resource")).resolves.toBeNull();
+    });
+
+    it("passes the TTL through as whole seconds, rounded up", async () => {
+      mockSet.mockResolvedValue("OK");
+
+      const lockId = await redisService.acquireLock("resource", 2500);
+
+      expect(lockId).toEqual(expect.any(String));
+      expect(mockSet).toHaveBeenCalledWith(
+        "lock:resource",
+        lockId,
+        "EX",
+        3,
+        "NX"
+      );
+    });
+  });
+
+  describe("releaseLock result branches", () => {
+    it("returns false when the lock is owned by someone else (eval returns 0)", async () => {
+      mockEval.mockResolvedValue(0);
+
+      await expect(redisService.releaseLock("resource", "lock-1")).resolves.toBe(
+        false
+      );
+    });
+  });
+
+  describe("cacheKeys", () => {
+    it("builds every documented key shape", () => {
+      const { cacheKeys } = redisService;
+      expect(cacheKeys.user("u1")).toBe("user:u1");
+      expect(cacheKeys.userByEmail("a@b.com")).toBe("user:email:a@b.com");
+      expect(cacheKeys.userByUsername("bob")).toBe("user:username:bob");
+      expect(cacheKeys.tenant("t1")).toBe("tenant:t1");
+      expect(cacheKeys.tenantByCode("T1")).toBe("tenant:code:T1");
+      expect(cacheKeys.tenantSettings("t1")).toBe("tenant:settings:t1");
+      expect(cacheKeys.role("r1")).toBe("role:r1");
+      expect(cacheKeys.permissions("r1")).toBe("permissions:role:r1");
+      expect(cacheKeys.userPermissions("u1")).toBe("permissions:user:u1");
+      expect(cacheKeys.session("abc")).toBe("session:abc");
+      expect(cacheKeys.rateLimit("ip")).toBe("ratelimit:ip");
+      expect(cacheKeys.lock("res")).toBe("lock:res");
+    });
   });
 });

@@ -94,4 +94,61 @@ describe("networkSecurity.service", () => {
       expect(result.requiresStepUp).toBe(true);
     });
   });
+
+  // ------------------------------------------------------------------
+  // Corrupt/undecodable stored settings must degrade safely rather than
+  // throw — these are the JSON.parse and CIDR-parse catch branches.
+  // ------------------------------------------------------------------
+  describe("malformed stored data", () => {
+    it("returns an empty allowlist when the stored value is not JSON", async () => {
+      TenantSettings.findOne.mockResolvedValue({ value: "}{not json" });
+
+      await expect(networkSecurity.getTenantIpAllowlist("t1")).resolves.toEqual(
+        [],
+      );
+    });
+
+    it("returns a null geofence when the stored value is not JSON", async () => {
+      TenantSettings.findOne.mockResolvedValue({ value: "}{not json" });
+
+      await expect(networkSecurity.getTenantGeofence("t1")).resolves.toBeNull();
+    });
+
+    it("returns an empty allowlist when the stored value is empty", async () => {
+      // Exercises the `setting.value || "[]"` fallback (row exists, value null).
+      TenantSettings.findOne.mockResolvedValue({ value: null });
+
+      await expect(networkSecurity.getTenantIpAllowlist("t1")).resolves.toEqual(
+        [],
+      );
+    });
+
+    it("returns a null geofence when the stored value is empty", async () => {
+      // Exercises the `setting.value || "null"` fallback.
+      TenantSettings.findOne.mockResolvedValue({ value: null });
+
+      await expect(networkSecurity.getTenantGeofence("t1")).resolves.toBeNull();
+    });
+
+    it("treats an unparseable CIDR as not matching rather than throwing", async () => {
+      TenantSettings.findOne.mockResolvedValue({
+        value: JSON.stringify(["not-a-cidr"]),
+      });
+
+      const result = await networkSecurity.checkIpAllowlist("t1", "10.0.0.1");
+
+      // isInCidr swallows the parse error and returns false.
+      expect(result.allowed).toBe(false);
+    });
+
+    it("treats a malformed IP as not matching rather than throwing", async () => {
+      TenantSettings.findOne.mockResolvedValue({
+        value: JSON.stringify(["10.0.0.0/8"]),
+      });
+
+      const result = await networkSecurity.checkIpAllowlist("t1", "not.an.ip");
+
+      expect(result.allowed).toBe(false);
+    });
+  });
 });

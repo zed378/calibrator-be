@@ -10,6 +10,8 @@
 const tenantHierarchyService = require("../services/tenantHierarchy.service");
 const { success, error } = require("../utils/response.util");
 const { asyncHandler } = require("../utils/controllerWrapper.util");
+const { AppError, formatErrors } = require("../utils/appError.util");
+const { addChild: addChildValidator } = require("../validators/tenantHierarchy.validator");
 const { logger } = require("../middlewares/activityLog.middleware");
 
 /**
@@ -172,12 +174,22 @@ exports.getTenantAncestors = asyncHandler(async (req, res) => {
 exports.addChildTenant = asyncHandler(async (req, res) => {
   const { parentId } = req.params;
 
+  // Validated here rather than as route middleware: the exported `addChild`
+  // is a Joi schema, and passing its `.validate` to express threw on every
+  // request. stripUnknown/abortEarly come from the schema's own options.
+  const { error, value } = addChildValidator.validate(req.body);
+  if (error) {
+    throw new AppError(400, formatErrors(error.details) || "Validation failed");
+  }
+
   const result = await tenantHierarchyService.createSubOrganization(
     parentId,
-    req.body,
+    value,
   );
 
-  return success(res, result, 201, "Child tenant created");
+  // success(res, data, meta, message, statusCode) — passing 201 as the third
+  // arg put it in `meta` and left the status at 200.
+  return success(res, result, null, "Child tenant created", 201);
 });
 
 /**

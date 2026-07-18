@@ -2,7 +2,9 @@ const path = require('path');
 
 module.exports = {
   async up({ context }) {
-    const { queryInterface } = context;
+    // `context` is the QueryInterface. Tolerate the legacy { queryInterface }
+    // wrapper this file used to assume, as 0011 already does.
+    const queryInterface = context.queryInterface || context;
 
     if (queryInterface.sequelize.getDialect() !== 'postgres') {
       return;
@@ -83,7 +85,7 @@ module.exports = {
   },
 
   async down({ context }) {
-    const { queryInterface } = context;
+    const queryInterface = context.queryInterface || context;
 
     if (queryInterface.sequelize.getDialect() !== 'postgres') {
       return;

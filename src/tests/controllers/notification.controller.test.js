@@ -7,6 +7,8 @@ jest.mock("../../services/notification.service", () => ({
   markAsRead: jest.fn(),
   markAllAsRead: jest.fn(),
   deleteNotification: jest.fn(),
+  deleteAllNotifications: jest.fn(),
+  deleteManyNotifications: jest.fn(),
   emitNotification: jest.fn(),
 }));
 
@@ -62,7 +64,6 @@ describe("notification Controller", () => {
         expect.objectContaining({
           tenantId: "550e8400-e29b-41d4-a716-446655440001",
           userId: "550e8400-e29b-41d4-a716-446655440000",
-          isSuperAdmin: false,
           page: "1",
           limit: "10",
         }),
@@ -70,37 +71,27 @@ describe("notification Controller", () => {
       expect(success).toHaveBeenCalled();
     });
 
-    it("should set isSuperAdmin for SUPER_ADMIN role", async () => {
-      req.query = { page: "1", limit: "10" };
-      req.user.role.name = "SUPER_ADMIN";
-      notificationService.fetchUserNotifications.mockResolvedValue({
-        data: { rows: [], meta: { total: 0 } },
-      });
+    // The feed is a personal inbox — a SUPER_ADMIN role must NOT widen it.
+    // It previously did, which surfaced other users' notifications and then
+    // 404'd on mark-as-read (the mutations are recipient scoped).
+    it.each(["SUPER_ADMIN", "SUPERADMIN"])(
+      "does not widen the feed for the %s role",
+      async (roleName) => {
+        req.query = { page: "1", limit: "10" };
+        req.user.role.name = roleName;
+        notificationService.fetchUserNotifications.mockResolvedValue({
+          data: { rows: [], meta: { total: 0 } },
+        });
 
-      await notificationController.fetchUserNotifications(req, res, next);
+        await notificationController.fetchUserNotifications(req, res, next);
 
-      expect(notificationService.fetchUserNotifications).toHaveBeenCalledWith(
-        expect.objectContaining({
-          isSuperAdmin: true,
-        }),
-      );
-    });
-
-    it("should set isSuperAdmin for SUPERADMIN role", async () => {
-      req.query = { page: "1", limit: "10" };
-      req.user.role.name = "SUPERADMIN";
-      notificationService.fetchUserNotifications.mockResolvedValue({
-        data: { rows: [], meta: { total: 0 } },
-      });
-
-      await notificationController.fetchUserNotifications(req, res, next);
-
-      expect(notificationService.fetchUserNotifications).toHaveBeenCalledWith(
-        expect.objectContaining({
-          isSuperAdmin: true,
-        }),
-      );
-    });
+        const args =
+          notificationService.fetchUserNotifications.mock.calls[0][0];
+        expect(args).not.toHaveProperty("isSuperAdmin");
+        expect(args.tenantId).toBe("550e8400-e29b-41d4-a716-446655440001");
+        expect(args.userId).toBe("550e8400-e29b-41d4-a716-446655440000");
+      },
+    );
 
     it("should filter by isRead", async () => {
       req.query = { page: "1", limit: "10", isRead: "true" };
@@ -184,6 +175,44 @@ describe("notification Controller", () => {
         "550e8400-e29b-41d4-a716-446655440001",
         "550e8400-e29b-41d4-a716-446655440000",
         "notif-1",
+      );
+      expect(success).toHaveBeenCalled();
+    });
+  });
+
+  describe("deleteAllNotifications", () => {
+    it("deletes everything in the caller's scope", async () => {
+      notificationService.deleteAllNotifications.mockResolvedValue({
+        data: { deleted: 3 },
+        message: "3 notifications deleted",
+        status: 200,
+      });
+
+      await notificationController.deleteAllNotifications(req, res, next);
+
+      expect(notificationService.deleteAllNotifications).toHaveBeenCalledWith(
+        "550e8400-e29b-41d4-a716-446655440001",
+        "550e8400-e29b-41d4-a716-446655440000",
+      );
+      expect(success).toHaveBeenCalled();
+    });
+  });
+
+  describe("deleteManyNotifications", () => {
+    it("forwards the selected ids", async () => {
+      req.body = { ids: ["n-1", "n-2"] };
+      notificationService.deleteManyNotifications.mockResolvedValue({
+        data: { deleted: 2, requested: 2 },
+        message: "2 notifications deleted",
+        status: 200,
+      });
+
+      await notificationController.deleteManyNotifications(req, res, next);
+
+      expect(notificationService.deleteManyNotifications).toHaveBeenCalledWith(
+        "550e8400-e29b-41d4-a716-446655440001",
+        "550e8400-e29b-41d4-a716-446655440000",
+        ["n-1", "n-2"],
       );
       expect(success).toHaveBeenCalled();
     });

@@ -472,6 +472,11 @@ When serializing user data for authentication, profile updates, or user creation
 
 ![User Menu Resolution](illustrations/16-user-menu-resolution.svg)
 
+### Kanban Architecture
+
+![Kanban Architecture](illustrations/32-kanban-architecture.svg)
+![Kanban Card Lifecycle](illustrations/33-kanban-card-lifecycle.svg)
+
 ### Authorization Layers
 
 Authorization is resolved in four layers, evaluated in order:
@@ -859,6 +864,65 @@ Audit entries can never be updated or deleted through the API.
 - **Polymorphic**: attached via `resourceType`/`resourceId` (devices, work orders, etc.)
 - **Download**: signed URLs using an HMAC token with a 300-second TTL
 - **Quota**: uploads count against the tenant storage quota (413 when exceeded)
+
+### Kanban Project Tracker
+
+`/api/v1/kanban` is a tenant-scoped project tracker where **one project === one Kanban board** — each with its own configurable columns, cards, labels, sprints, and per-project membership (`owner`/`editor`/`viewer`, grantable by user **or** role). Real-time collaboration is delivered over Socket.IO (room `board_<projectId>`), with assignee/tag notifications, image attachments, and a KPI analytics dashboard. See `src/routes/api/kanban.route.js`, `src/services/kanban.service.js`, `src/controllers/kanban.controller.js`, `src/validators/kanban.validator.js`, and `src/models/kanban*.model.js`.
+
+| Method | Endpoint                                       | Description                                        |
+| ------ | ---------------------------------------------- | -------------------------------------------------- |
+| GET    | `/api/v1/kanban/projects`                      | List boards the user can access                    |
+| POST   | `/api/v1/kanban/projects`                      | Create a board (seeds columns incl. permanent Done)|
+| GET    | `/api/v1/kanban/projects/:id`                  | Board detail (columns, cards, labels, members)     |
+| PATCH  | `/api/v1/kanban/projects/:id`                  | Update board                                       |
+| DELETE | `/api/v1/kanban/projects/:id`                  | Delete board                                       |
+| GET    | `/api/v1/kanban/projects/:id/members`          | List members                                       |
+| POST   | `/api/v1/kanban/projects/:id/members`          | Grant membership by user or role                   |
+| POST   | `/api/v1/kanban/projects/:id/columns`          | Add a column (Done stays undeletable and last)     |
+| POST   | `/api/v1/kanban/projects/:id/columns/reorder`  | Reorder columns (Done forced last)                 |
+| PATCH  | `/api/v1/kanban/projects/:id/columns/:columnId`| Rename a column                                    |
+| DELETE | `/api/v1/kanban/projects/:id/columns/:columnId`| Delete a column (except Done)                      |
+| POST   | `/api/v1/kanban/projects/:id/cards`            | Create a card (auto card key, e.g. `MGT-1`)        |
+| PATCH  | `/api/v1/kanban/projects/:id/cards/:cardId`    | Update card (priority, due date, sprint, etc.)     |
+| PATCH  | `/api/v1/kanban/projects/:id/cards/:cardId/move`| Move a card between columns/positions             |
+| DELETE | `/api/v1/kanban/projects/:id/cards/:cardId`    | Delete a card                                       |
+| POST   | `/api/v1/kanban/projects/:id/cards/:cardId/relations` | Link cards (parent/child, blocks, relates)  |
+| POST   | `/api/v1/kanban/projects/:id/labels`           | Manage labels                                      |
+| POST   | `/api/v1/kanban/projects/:id/sprints`          | Manage sprints (board loads one sprint at a time)  |
+| POST   | `/api/v1/kanban/projects/:id/sprints/migrate`  | Migrate cards (selected or all-not-Done) to sprint |
+| GET    | `/api/v1/kanban/projects/:id/metrics`          | KPI analytics dashboard aggregates                 |
+
+**Tables (9):**
+
+- `kanban_projects` — board metadata, unique `code` prefix + `card_seq` counter
+- `kanban_project_members` — per-project `owner`/`editor`/`viewer`, granted by user or role
+- `kanban_columns` — dynamic per-tenant columns, `is_done` flag for the permanent Done column
+- `kanban_cards` — `sprint_id`, `number`, `card_key`, `priority`, `due_date`
+- `kanban_labels` — board labels
+- `kanban_card_assignees` — card ↔ user assignments
+- `kanban_card_labels` — card ↔ label mapping
+- `kanban_sprints` — board sprints
+- `kanban_card_relations` — `parent_of`/`child_of`, `blocks`/`blocked_by`, `relates_to`, `duplicates` (stored in both directions)
+
+**Key features:**
+
+- **Dynamic columns**: per-tenant configurable columns, with a permanent **Done** column that is undeletable and always rendered last
+- **Card keys**: incremental, human-readable keys built from the project `code` prefix + `card_seq` (e.g. `MGT-1`)
+- **Sprints**: the board loads one sprint at a time; **migrate** moves selected cards, or all cards not in Done, into a target sprint
+- **Relations**: `parent_of`/`child_of`, `blocks`/`blocked_by`, `relates_to`, and `duplicates`, persisted in both directions
+- **Collaboration**: assignees, labels, and image attachments, with assignee/tag notifications
+
+**Realtime events** (Socket.IO, room `board_<projectId>`):
+
+- `kanban:card:created`, `kanban:card:updated`, `kanban:card:moved`, `kanban:card:deleted`
+- `kanban:column:*` (created/updated/deleted/reordered)
+- `kanban:sprint:*` (created/updated/deleted)
+- `kanban:cards:migrated`
+
+**Analytics:** `GET /api/v1/kanban/projects/:id/metrics` returns a KPI dashboard payload — a `summary` block plus `byColumn`, `byPriority`, `byAssignee`, `byLabel`, and `bySprint` breakdowns.
+
+![Kanban Architecture](illustrations/32-kanban-architecture.svg)
+![Kanban Card Lifecycle](illustrations/33-kanban-card-lifecycle.svg)
 
 ---
 

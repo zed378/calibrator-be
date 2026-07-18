@@ -207,4 +207,97 @@ describe("rbac middleware", () => {
       expect(next).toHaveBeenCalled();
     });
   });
+
+  describe("extra branch checks", () => {
+    it("should default to status 500 when error is generic in rbac middleware", () => {
+      req.user = { role: { name: "USER" } };
+      const middleware = rbac(null); // Will throw TypeError when mapping requiredRoles
+      middleware(req, res, next);
+      expect(next).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 500 }),
+      );
+    });
+
+    it("should default minLevel to 1 in checkRoleLevel", () => {
+      req.user = { role: { roleLevel: 0 } };
+      const middleware = checkRoleLevel();
+      middleware(req, res, next);
+      expect(next).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 403 }),
+      );
+    });
+
+    it("should skip undefined ROLE_LEVELS during module initialization", () => {
+      jest.isolateModules(() => {
+        jest.doMock("../../constants", () => ({
+          ROLE_NAMES: { TEST_ROLE: "TEST_ROLE", OTHER_ROLE: "OTHER_ROLE" },
+          ROLE_LEVELS: { TEST_ROLE: 5 }, // OTHER_ROLE has no level
+        }));
+        const { rbac } = require("../../middlewares/rbac.middleware");
+        expect(rbac).toBeDefined();
+      });
+    });
+  });
+
+  // --- generic (non-Error) failure handling ---
+  //
+  // Each middleware's catch block falls back to "Internal Server Error" when the
+  // thrown value carries no message, and classifies the status purely from the
+  // message text. A throw that is neither Unauthorized nor Forbidden must
+  // surface as a 500 rather than being mislabelled as an auth failure.
+
+  describe("non-Error throws", () => {
+    // Make a user object whose `role` access throws a value with no `.message`.
+    const userWithThrowingRole = () => {
+      const user = {};
+      Object.defineProperty(user, "role", {
+        get() {
+          throw { code: "EUNEXPECTED" };
+        },
+      });
+      return user;
+    };
+
+    it("rbac should return a 500 when a value without a message is thrown", () => {
+      req.user = userWithThrowingRole();
+      rbac(["USER"])(req, res, next);
+      expect(next).toHaveBeenCalledWith({
+        status: 500,
+        message: "Internal Server Error",
+        isOperational: true,
+      });
+    });
+
+    it("checkRoleLevel should return a 500 when a value without a message is thrown", () => {
+      const role = {};
+      Object.defineProperty(role, "roleLevel", {
+        get() {
+          throw { code: "EUNEXPECTED" };
+        },
+      });
+      req.user = { role };
+      checkRoleLevel(5)(req, res, next);
+      expect(next).toHaveBeenCalledWith({
+        status: 500,
+        message: "Internal Server Error",
+        isOperational: true,
+      });
+    });
+
+    it("notSuperAdmin should return a 500 when a value without a message is thrown", () => {
+      const role = {};
+      Object.defineProperty(role, "name", {
+        get() {
+          throw { code: "EUNEXPECTED" };
+        },
+      });
+      req.user = { role };
+      notSuperAdmin()(req, res, next);
+      expect(next).toHaveBeenCalledWith({
+        status: 500,
+        message: "Internal Server Error",
+        isOperational: true,
+      });
+    });
+  });
 });

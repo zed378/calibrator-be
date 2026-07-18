@@ -28,7 +28,9 @@ exports.createKeyPair = asyncHandler(async (req, res) => {
 
   const result = await eSignatureService.generateKeyPair(tenantId);
 
-  return success(res, result, 201, "Key pair generated");
+  // success(res, data, meta, message, statusCode) — passing 201 third put it
+  // in `meta` and left the response at HTTP 200.
+  return success(res, result, null, "Key pair generated", 201);
 });
 
 /**
@@ -70,7 +72,7 @@ exports.createWorkflow = asyncHandler(async (req, res) => {
     expiresAt,
   });
 
-  return success(res, result, 201, "Signature workflow created");
+  return success(res, result, null, "Signature workflow created", 201);
 });
 
 /**
@@ -116,17 +118,27 @@ exports.deleteWorkflow = asyncHandler(async (req, res) => {
  * Sign a document
  */
 exports.signDocument = asyncHandler(async (req, res) => {
-  const { stepId } = req.params;
-  const { userId, tenantId } = req.user;
-  const { polygon, biometricData, authenticationMethod, ipAddress, userAgent } =
-    req.body;
-
-  const result = await eSignatureService.signDocument(stepId, userId, {
+  // stepId comes from the validated body: the route is POST /sign and has no
+  // :stepId param, so req.params.stepId was always undefined.
+  const {
+    stepId,
     polygon,
     biometricData,
     authenticationMethod,
     ipAddress,
     userAgent,
+  } = req.body;
+  // req.user exposes `id`; there is no `userId` on it.
+  const { id: userId } = req.user;
+
+  const result = await eSignatureService.signDocument(stepId, userId, {
+    polygon,
+    biometricData,
+    authenticationMethod,
+    // Fall back to the real connection details when the client omits them —
+    // 21 CFR Part 11 expects these on the signature record.
+    ipAddress: ipAddress || req.ip,
+    userAgent: userAgent || req.get("user-agent"),
   });
 
   return success(res, result, "Document signed");
@@ -136,7 +148,8 @@ exports.signDocument = asyncHandler(async (req, res) => {
  * Verify a signature
  */
 exports.verifySignature = asyncHandler(async (req, res) => {
-  const { signatureId } = req.params;
+  // Body, not params: the route is POST /verify with no :signatureId.
+  const { signatureId } = req.body;
 
   const result = await eSignatureService.verifySignature(signatureId);
 
@@ -164,7 +177,8 @@ exports.getSignatureHistory = asyncHandler(async (req, res) => {
  */
 exports.cancelWorkflow = asyncHandler(async (req, res) => {
   const { workflowId } = req.params;
-  const { userId, tenantId } = req.user;
+  // req.user exposes `id`, not `userId`.
+  const { id: userId, tenantId } = req.user;
 
   await eSignatureService.cancelWorkflow(workflowId, userId, tenantId);
 
@@ -176,7 +190,8 @@ exports.cancelWorkflow = asyncHandler(async (req, res) => {
  */
 exports.revokeSignature = asyncHandler(async (req, res) => {
   const { signatureId } = req.params;
-  const { userId, tenantId } = req.user;
+  // req.user exposes `id`, not `userId`.
+  const { id: userId, tenantId } = req.user;
   const { reason } = req.body;
 
   await eSignatureService.revokeSignature(

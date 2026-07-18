@@ -39,9 +39,14 @@ exports.createWorkflow = Joi.object({
 }).options({ abortEarly: false, stripUnknown: true });
 
 /**
- * Validate document signing
+ * Validate document signing.
+ *
+ * stepId travels in the body because the route is POST /sign with no path
+ * param — the controller previously read req.params.stepId, which was always
+ * undefined.
  */
 exports.signDocument = Joi.object({
+  stepId: Joi.string().uuid().required(),
   polygon: Joi.object().optional().allow(null),
   biometricData: Joi.string().optional().allow(null),
   authenticationMethod: Joi.string()
@@ -49,6 +54,14 @@ exports.signDocument = Joi.object({
     .default("password"),
   ipAddress: Joi.string().optional(),
   userAgent: Joi.string().optional(),
+}).options({ abortEarly: false, stripUnknown: true });
+
+/**
+ * Validate signature verification. Same reasoning as signDocument: the route
+ * is POST /verify with no path param.
+ */
+exports.verifySignature = Joi.object({
+  signatureId: Joi.string().uuid().required(),
 }).options({ abortEarly: false, stripUnknown: true });
 
 /**

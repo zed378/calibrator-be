@@ -857,27 +857,9 @@ router.post('/impersonate', auth, impersonateUser);
  */
 router.post('/impersonate/exit', auth, logout);
 
-/**
- * @swagger
- * /api/v1/auth/mfa/setup:
- *   post:
- *     tags: [Auth]
- *     summary: Setup MFA (TOTP)
- *     security:
- *       - bearerAuth: []
- */
-router.post('/mfa/setup', auth, setupMfa);
-
-/**
- * @swagger
- * /api/v1/auth/mfa/verify:
- *   post:
- *     tags: [Auth]
- *     summary: Verify and enable MFA setup
- *     security:
- *       - bearerAuth: []
- */
-router.post('/mfa/verify', auth, verifyMfaSetup);
+// /mfa/setup and /mfa/verify are registered earlier in this file; the
+// duplicate registrations that used to sit here were dead (express matches the
+// first). Only /mfa/login is unique to this block.
 
 /**
  * @swagger
@@ -885,7 +867,31 @@ router.post('/mfa/verify', auth, verifyMfaSetup);
  *   post:
  *     tags: [Auth]
  *     summary: Login with MFA token
+ *     description: >
+ *       Second step of an MFA login. Takes the temporary token issued by
+ *       /auth/login plus the current TOTP code, and returns a full session.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [code, token]
+ *             properties:
+ *               code:
+ *                 type: string
+ *                 description: The 6-digit TOTP code.
+ *               token:
+ *                 type: string
+ *                 description: The temporary token returned by /auth/login.
+ *     responses:
+ *       200:
+ *         description: Login successful
+ *       400:
+ *         description: MFA code and temporary token are required
+ *       401:
+ *         description: Invalid MFA code, or invalid/expired login token
  */
-router.post('/mfa/login', loginMfa);
+router.post("/mfa/login", loginMfa);
 
 module.exports = router;

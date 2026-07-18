@@ -300,7 +300,7 @@ describe("batchJobService", () => {
 
     it("should handle job failure during processing", async () => {
       jest.useFakeTimers();
-      
+
       const jobId = "job-1";
       const mockJob = {
         id: jobId,
@@ -318,8 +318,219 @@ describe("batchJobService", () => {
 
       // Should not throw error
       expect(() => jest.advanceTimersByTime(1000)).not.toThrow();
-      
+
       jest.useRealTimers();
+    });
+  });
+
+  // ================================================================
+  // Coverage: the interval body — progress, completion, cancellation, errors.
+  // These use advanceTimersByTimeAsync so the async interval callback's awaits
+  // actually settle between ticks.
+  // ================================================================
+  describe("simulateProcessing interval body", () => {
+    beforeEach(() => {
+      // The older simulateProcessing tests above queue `mockResolvedValueOnce`
+      // values that they never consume (they drive the async interval with the
+      // non-async advanceTimersByTime). jest.config has resetMocks:false, so
+      // those queues would leak into these tests. Reset them explicitly.
+      BatchJob.findByPk.mockReset();
+      BatchJob.update.mockReset();
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    });
+
+    const makeJob = (overrides = {}) => ({
+      id: "job-1",
+      totalItems: 2,
+      processedItems: 0,
+      progress: 0,
+      status: "PENDING",
+      save: jest.fn().mockResolvedValue(true),
+      ...overrides,
+    });
+
+    it("marks the job PROCESSING before the first item tick", async () => {
+      const job = makeJob();
+      BatchJob.findByPk.mockResolvedValue(job);
+
+      batchJobService.simulateProcessing("job-1");
+      await jest.advanceTimersByTimeAsync(1000);
+
+      expect(job.status).toBe("PROCESSING");
+      expect(job.save).toHaveBeenCalled();
+    });
+
+    it("advances processedItems and progress on each tick", async () => {
+      const job = makeJob({ totalItems: 4 });
+      BatchJob.findByPk.mockResolvedValue(job);
+
+      batchJobService.simulateProcessing("job-1");
+      await jest.advanceTimersByTimeAsync(1000); // start
+
+      await jest.advanceTimersByTimeAsync(1000); // item 1
+      expect(job.processedItems).toBe(1);
+      expect(job.progress).toBe(25);
+
+      await jest.advanceTimersByTimeAsync(1000); // item 2
+      expect(job.processedItems).toBe(2);
+      expect(job.progress).toBe(50);
+      expect(job.status).toBe("PROCESSING");
+    });
+
+    it("completes the job and stops ticking once every item is processed", async () => {
+      const job = makeJob({ totalItems: 2 });
+      BatchJob.findByPk.mockResolvedValue(job);
+
+      batchJobService.simulateProcessing("job-1");
+      await jest.advanceTimersByTimeAsync(1000); // start
+      await jest.advanceTimersByTimeAsync(1000); // item 1
+      expect(job.status).toBe("PROCESSING");
+
+      await jest.advanceTimersByTimeAsync(1000); // item 2 → completes
+      expect(job.status).toBe("COMPLETED");
+      expect(job.progress).toBe(100);
+      expect(job.resultUrl).toBe("/api/v1/jobs/job-1/download");
+
+      const savesAtCompletion = job.save.mock.calls.length;
+      // The interval must be cleared — further ticks change nothing.
+      await jest.advanceTimersByTimeAsync(5000);
+      expect(job.save).toHaveBeenCalledTimes(savesAtCompletion);
+      expect(job.processedItems).toBe(2);
+    });
+
+    it("defaults to 10 items when totalItems is 0", async () => {
+      const job = makeJob({ totalItems: 0 });
+      BatchJob.findByPk.mockResolvedValue(job);
+
+      batchJobService.simulateProcessing("job-1");
+      await jest.advanceTimersByTimeAsync(1000); // start
+      await jest.advanceTimersByTimeAsync(1000); // item 1 of 10
+
+      expect(job.progress).toBe(10);
+      expect(job.status).toBe("PROCESSING");
+    });
+
+    it("stops ticking when the job is deleted mid-run", async () => {
+      const job = makeJob({ totalItems: 5 });
+      BatchJob.findByPk.mockResolvedValueOnce(job); // initial load
+      BatchJob.findByPk.mockResolvedValue(null); // deleted before the first tick
+
+      batchJobService.simulateProcessing("job-1");
+      await jest.advanceTimersByTimeAsync(1000); // start
+
+      const savesAtStart = job.save.mock.calls.length;
+      await jest.advanceTimersByTimeAsync(5000);
+
+      // No further saves once the row disappeared.
+      expect(job.save).toHaveBeenCalledTimes(savesAtStart);
+    });
+
+    it("stops ticking when the job has been marked FAILED elsewhere", async () => {
+      const job = makeJob({ totalItems: 5 });
+      const failed = makeJob({ status: "FAILED", totalItems: 5 });
+      BatchJob.findByPk.mockResolvedValueOnce(job); // initial load
+      BatchJob.findByPk.mockResolvedValue(failed); // ticks see FAILED
+
+      batchJobService.simulateProcessing("job-1");
+      await jest.advanceTimersByTimeAsync(1000); // start
+      await jest.advanceTimersByTimeAsync(5000);
+
+      // The FAILED job is never written back, and the interval is cleared.
+      expect(failed.save).not.toHaveBeenCalled();
+      expect(failed.processedItems).toBe(0);
+    });
+
+    it("returns early without scheduling an interval when the job is missing", async () => {
+      BatchJob.findByPk.mockResolvedValue(null);
+
+      batchJobService.simulateProcessing("missing");
+      await jest.advanceTimersByTimeAsync(1000);
+
+      expect(BatchJob.findByPk).toHaveBeenCalledTimes(1);
+      expect(BatchJob.update).not.toHaveBeenCalled();
+
+      await jest.advanceTimersByTimeAsync(5000);
+      expect(BatchJob.findByPk).toHaveBeenCalledTimes(1);
+    });
+
+    it("marks the job FAILED when the initial load throws", async () => {
+      const consoleSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      BatchJob.findByPk.mockRejectedValue(new Error("DB exploded"));
+
+      batchJobService.simulateProcessing("job-1");
+      await jest.advanceTimersByTimeAsync(1000);
+
+      expect(BatchJob.update).toHaveBeenCalledWith(
+        { status: "FAILED", errorDetails: "DB exploded" },
+        { where: { id: "job-1" } },
+      );
+
+      consoleSpy.mockRestore();
+    });
+
+    it("marks the job FAILED when the first save throws", async () => {
+      const consoleSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      const job = makeJob({ save: jest.fn().mockRejectedValue(new Error("save failed")) });
+      BatchJob.findByPk.mockResolvedValue(job);
+
+      batchJobService.simulateProcessing("job-1");
+      await jest.advanceTimersByTimeAsync(1000);
+
+      expect(BatchJob.update).toHaveBeenCalledWith(
+        { status: "FAILED", errorDetails: "save failed" },
+        { where: { id: "job-1" } },
+      );
+
+      consoleSpy.mockRestore();
+    });
+  });
+
+  describe("createJob kicks off processing", () => {
+    it("starts the simulated worker for the created job", async () => {
+      const spy = jest
+        .spyOn(batchJobService, "simulateProcessing")
+        .mockResolvedValue(undefined);
+      BatchJob.create.mockResolvedValueOnce({ id: "job-42" });
+
+      const result = await batchJobService.createJob("t-1", "u-1", "export", 5);
+
+      expect(spy).toHaveBeenCalledWith("job-42");
+      expect(result).toEqual({ id: "job-42" });
+
+      spy.mockRestore();
+    });
+  });
+
+  describe("getJobs pagination defaults", () => {
+    it("defaults to page 1 with a limit of 10 when neither is supplied", async () => {
+      BatchJob.findAndCountAll.mockResolvedValueOnce({ count: 3, rows: [] });
+
+      const result = await batchJobService.getJobs("tenant-1");
+
+      expect(BatchJob.findAndCountAll).toHaveBeenCalledWith({
+        where: { tenantId: "tenant-1" },
+        limit: 10,
+        offset: 0,
+        order: [["createdAt", "DESC"]],
+      });
+      expect(result.page).toBe(1);
+      expect(result.limit).toBe(10);
+      expect(result.totalPages).toBe(1);
+    });
+
+    it("coerces numeric string page/limit in the response meta", async () => {
+      BatchJob.findAndCountAll.mockResolvedValueOnce({ count: 30, rows: [] });
+
+      const result = await batchJobService.getJobs("tenant-1", "3", "5");
+
+      expect(result.page).toBe(3);
+      expect(result.limit).toBe(5);
+      expect(result.totalPages).toBe(6);
     });
   });
 });

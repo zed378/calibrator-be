@@ -321,6 +321,115 @@ describe("user Controller", () => {
     });
   });
 
+  describe("actor / envelope fallbacks", () => {
+    it("getAllUsers resolves actorTenantId to null when the user has no tenant", async () => {
+      // getActor() reads `req.user?.tenantId || null`. A non-super-admin with no
+      // tenant is scoped to null rather than to a client-supplied tenantId.
+      req.user = { id: VALID_USER_ID, role: { name: "USER" } };
+      req.query = { tenantId: VALID_TENANT_ID };
+      userService.fetchUsers.mockResolvedValue({
+        data: { rows: [] },
+        meta: { total: 0 },
+      });
+
+      await userController.getAllUsers(req, res, next);
+
+      expect(userService.fetchUsers).toHaveBeenCalledWith(
+        expect.objectContaining({ tenantId: null }),
+      );
+    });
+
+    it("getAllUsers passes result.data straight through when it is not a {rows} envelope", async () => {
+      const users = [{ id: VALID_USER_ID, username: "john" }];
+      userService.fetchUsers.mockResolvedValue({
+        data: users,
+        meta: { total: 1 },
+      });
+
+      await userController.getAllUsers(req, res, next);
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        users,
+        { total: 1 },
+        "Fetch users successful",
+        200,
+      );
+    });
+
+    it("createUser sends createdBy null when the actor has no id, and falls back to 201", async () => {
+      req.user = { id: undefined, role: { name: "SUPER_ADMIN" } };
+      req.body = {
+        username: "janedoe",
+        firstName: "Jane",
+        lastName: "Doe",
+        email: "jane@example.com",
+        password: "supersecret",
+        roleId: VALID_ROLE_ID,
+      };
+      userService.userCreate.mockResolvedValue({
+        data: { id: VALID_USER_ID },
+        message: "User created successfully",
+      });
+
+      await userController.createUser(req, res, next);
+
+      expect(userService.userCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          createdBy: null,
+          actorTenantId: null,
+          actorIsSuperAdmin: true,
+        }),
+      );
+      expect(success).toHaveBeenCalledWith(
+        res,
+        { id: VALID_USER_ID },
+        null,
+        "User created successfully",
+        201,
+      );
+    });
+
+    it("editUser sends updatedBy null when the actor has no id", async () => {
+      req.user = { id: undefined, role: { name: "SUPERADMIN" } };
+      req.body = { userId: VALID_USER_ID, firstName: "Jane" };
+      userService.editUser.mockResolvedValue({
+        data: { id: VALID_USER_ID },
+        status: 200,
+      });
+
+      await userController.editUser(req, res, next);
+
+      expect(userService.editUser).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: VALID_USER_ID,
+          updatedBy: null,
+          actorIsSuperAdmin: true,
+        }),
+      );
+      expect(success).toHaveBeenCalled();
+    });
+
+    it("deleteUser sends deletedBy null when the actor has no id", async () => {
+      req.user = { id: undefined, role: { name: "USER" }, tenantId: VALID_TENANT_ID };
+      req.query = { userId: VALID_USER_ID };
+      userService.deleteUser.mockResolvedValue({
+        data: { id: VALID_USER_ID },
+        message: "User deleted successfully",
+      });
+
+      await userController.deleteUser(req, res, next);
+
+      expect(userService.deleteUser).toHaveBeenCalledWith({
+        userId: VALID_USER_ID,
+        deletedBy: null,
+        actorTenantId: VALID_TENANT_ID,
+        actorIsSuperAdmin: false,
+      });
+      expect(success).toHaveBeenCalled();
+    });
+  });
+
   describe("getAllUsersSimple", () => {
     it("should return simple user list", async () => {
       req.query = { page: "1", limit: "10" };

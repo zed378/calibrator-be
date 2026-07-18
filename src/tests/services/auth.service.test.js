@@ -567,7 +567,12 @@ describe("auth.service", () => {
       expect(result.status).toBe(200);
       expect(result.message).toBe("OTP sent");
       expect(mockUser.update).toHaveBeenCalled();
-      expect(queueOtpEmail).toHaveBeenCalledWith("test@example.com", {
+      // queueOtpEmail takes ONE destructured object. This used to assert the
+      // broken (email, {...}) call — which pinned a bug that sent OTP mail
+      // with no recipient and no code, because every field was destructured
+      // off the email string.
+      expect(queueOtpEmail).toHaveBeenCalledWith({
+        email: "test@example.com",
         firstName: "Test",
         lastName: "User",
         otp: expect.any(String),
@@ -760,14 +765,20 @@ describe("auth.service", () => {
   describe("justUpdatePassword", () => {
     it("should update password and revoke sessions", async () => {
       hashPassword.mockResolvedValue("new-hashed-password");
+      comparePassword.mockResolvedValue(true);
 
       const mockUser = {
         id: "user-1",
+        password: "old-hashed-password",
         update: jest.fn().mockResolvedValue({}),
       };
       Users.findByPk.mockResolvedValue(mockUser);
 
-      const result = await justUpdatePassword("user-1", "newpassword123");
+      const result = await justUpdatePassword(
+        "user-1",
+        "newpassword123",
+        "current-password",
+      );
 
       expect(result.status).toBe(200);
       expect(result.message).toBe("Password updated successfully");
@@ -802,6 +813,36 @@ describe("auth.service", () => {
         `Password must be at least ${PASSWORD_MIN_LENGTH} characters`,
       );
     });
+
+    it("should reject when the current password is missing", async () => {
+      const mockUser = {
+        id: "user-1",
+        password: "old-hashed-password",
+        update: jest.fn(),
+      };
+      Users.findByPk.mockResolvedValue(mockUser);
+
+      await expect(
+        justUpdatePassword("user-1", "newpassword123"),
+      ).rejects.toThrow("Current password is required");
+      expect(mockUser.update).not.toHaveBeenCalled();
+    });
+
+    it("should reject when the current password is wrong (no takeover)", async () => {
+      comparePassword.mockResolvedValue(false);
+      const mockUser = {
+        id: "user-1",
+        password: "old-hashed-password",
+        update: jest.fn(),
+      };
+      Users.findByPk.mockResolvedValue(mockUser);
+
+      await expect(
+        justUpdatePassword("user-1", "newpassword123", "wrong-password"),
+      ).rejects.toThrow("Current password is incorrect");
+      expect(mockUser.update).not.toHaveBeenCalled();
+      expect(revokeAllSessions).not.toHaveBeenCalled();
+    });
   });
 
   // ========================
@@ -820,6 +861,7 @@ describe("auth.service", () => {
 
       expect(result.status).toBe(200);
       expect(result.data.valid).toBe(true);
+      expect(result.message).toBe("Password is valid");
       expect(comparePassword).toHaveBeenCalledWith(
         "correct-password",
         "hashed-password",
@@ -838,6 +880,8 @@ describe("auth.service", () => {
 
       expect(result.status).toBe(200);
       expect(result.data.valid).toBe(false);
+      // The message must not claim validity — clients read it.
+      expect(result.message).toBe("Password is incorrect");
     });
 
     it("should reject when user not found", async () => {

@@ -106,6 +106,37 @@ describe("calibrationRecords.service", () => {
       );
     });
 
+    it("applies only a lower bound when `from` is given without `to`", async () => {
+      const { Op } = require("sequelize");
+      CalibrationRecord.findAndCountAll.mockResolvedValueOnce({ rows: [], count: 0 });
+
+      await fetchCalibrationRecords({ tenantId: "tenant-1", from: "2026-01-01" });
+
+      const where = CalibrationRecord.findAndCountAll.mock.calls[0][0].where;
+      expect(where.calibrationDate[Op.gte]).toBe("2026-01-01");
+      expect(where.calibrationDate[Op.lte]).toBeUndefined();
+    });
+
+    it("applies only an upper bound when `to` is given without `from`", async () => {
+      const { Op } = require("sequelize");
+      CalibrationRecord.findAndCountAll.mockResolvedValueOnce({ rows: [], count: 0 });
+
+      await fetchCalibrationRecords({ tenantId: "tenant-1", to: "2026-06-30" });
+
+      const where = CalibrationRecord.findAndCountAll.mock.calls[0][0].where;
+      expect(where.calibrationDate[Op.lte]).toBe("2026-06-30");
+      expect(where.calibrationDate[Op.gte]).toBeUndefined();
+    });
+
+    it("omits the calibrationDate filter entirely when neither bound is given", async () => {
+      CalibrationRecord.findAndCountAll.mockResolvedValueOnce({ rows: [], count: 0 });
+
+      await fetchCalibrationRecords({ tenantId: "tenant-1" });
+
+      const where = CalibrationRecord.findAndCountAll.mock.calls[0][0].where;
+      expect(where).not.toHaveProperty("calibrationDate");
+    });
+
     it("should handle error during fetching", async () => {
       CalibrationRecord.findAndCountAll.mockRejectedValueOnce(new Error("Db error"));
       await expect(

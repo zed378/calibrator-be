@@ -313,4 +313,141 @@ describe("maintenance.service", () => {
       );
     });
   });
+
+  // ================================================================
+  // Branch coverage: transform helpers, field mapping, error fallbacks
+  // ================================================================
+  describe("transform helpers (via fetchWorkOrders)", () => {
+    it("should map a plain (non-Sequelize) row by spreading it when toJSON is absent", async () => {
+      MaintenanceWorkOrder.findAndCountAll.mockResolvedValueOnce({
+        rows: [{ id: "plain-1", title: "Plain WO" }],
+        count: 1,
+      });
+
+      const result = await fetchWorkOrders({ tenantId: "t-1" });
+
+      expect(result.data.rows).toEqual([{ id: "plain-1", title: "Plain WO" }]);
+    });
+
+    it("should map a null row to null rather than throwing", async () => {
+      MaintenanceWorkOrder.findAndCountAll.mockResolvedValueOnce({ rows: [null], count: 1 });
+
+      const result = await fetchWorkOrders({ tenantId: "t-1" });
+
+      expect(result.data.rows).toEqual([null]);
+    });
+
+    it("should return an empty rows array when the model returns undefined rows", async () => {
+      MaintenanceWorkOrder.findAndCountAll.mockResolvedValueOnce({ rows: undefined, count: 0 });
+
+      const result = await fetchWorkOrders({ tenantId: "t-1" });
+
+      expect(result.data.rows).toEqual([]);
+    });
+
+    it("should fall back to DEFAULT_LIMIT when limit is not numeric", async () => {
+      MaintenanceWorkOrder.findAndCountAll.mockResolvedValueOnce({ rows: [], count: 0 });
+
+      await fetchWorkOrders({ tenantId: "t-1", limit: "not-a-number" });
+
+      expect(MaintenanceWorkOrder.findAndCountAll.mock.calls[0][0].limit).toBe(25); // DEFAULT_LIMIT
+    });
+
+    it("should filter by priority", async () => {
+      MaintenanceWorkOrder.findAndCountAll.mockResolvedValueOnce({ rows: [], count: 0 });
+
+      await fetchWorkOrders({ tenantId: "t-1", priority: "HIGH" });
+
+      expect(MaintenanceWorkOrder.findAndCountAll).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ priority: "HIGH" }),
+        }),
+      );
+    });
+
+    it("should filter by deviceId", async () => {
+      MaintenanceWorkOrder.findAndCountAll.mockResolvedValueOnce({ rows: [], count: 0 });
+
+      await fetchWorkOrders({ tenantId: "t-1", deviceId: "dev-9" });
+
+      expect(MaintenanceWorkOrder.findAndCountAll).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ deviceId: "dev-9" }),
+        }),
+      );
+    });
+  });
+
+  describe("toModelFields mapping (via createWorkOrder)", () => {
+    it("should tolerate an undefined payload and still stamp the tenantId", async () => {
+      MaintenanceWorkOrder.create.mockResolvedValueOnce(mockWorkOrder());
+
+      await createWorkOrder("t-1", undefined);
+
+      expect(MaintenanceWorkOrder.create).toHaveBeenCalledWith({ tenantId: "t-1" });
+    });
+
+    it("should map an explicitly null assigneeId to assignedTo (unassigning)", async () => {
+      // `assigneeId !== undefined`, so a null must map through as an unassign.
+      MaintenanceWorkOrder.create.mockResolvedValueOnce(mockWorkOrder());
+
+      await createWorkOrder("t-1", { title: "X", assigneeId: null });
+
+      expect(MaintenanceWorkOrder.create).toHaveBeenCalledWith({
+        title: "X",
+        assignedTo: null,
+        tenantId: "t-1",
+      });
+    });
+
+    it("should not emit an assignedTo key when assigneeId is absent", async () => {
+      MaintenanceWorkOrder.create.mockResolvedValueOnce(mockWorkOrder());
+
+      await createWorkOrder("t-1", { title: "X" });
+
+      expect(MaintenanceWorkOrder.create.mock.calls[0][0]).not.toHaveProperty("assignedTo");
+    });
+  });
+
+  describe("error normalisation fallbacks", () => {
+    // Every exported method funnels failures through
+    // `{ status: error.status || 500, message: error.message || "<default>" }`.
+    const cases = [
+      ["fetchWorkOrders", () => fetchWorkOrders({ tenantId: "t-1" }), "findAndCountAll", "Failed to fetch maintenance work orders"],
+      ["getWorkOrderById", () => getWorkOrderById("t-1", "wo-1"), "findOne", "Failed to retrieve maintenance work order"],
+      ["createWorkOrder", () => createWorkOrder("t-1", { title: "X" }), "create", "Failed to create maintenance work order"],
+      ["updateWorkOrder", () => updateWorkOrder("t-1", "wo-1", { title: "X" }), "findOne", "Failed to update maintenance work order"],
+      ["deleteWorkOrder", () => deleteWorkOrder("t-1", "wo-1"), "findOne", "Failed to delete maintenance work order"],
+    ];
+
+    it.each(cases)(
+      "%s should default to status 500 and its own message when the error carries neither",
+      async (_name, invoke, mockFn, defaultMessage) => {
+        MaintenanceWorkOrder[mockFn].mockRejectedValueOnce({});
+
+        await expect(invoke()).rejects.toEqual({
+          status: 500,
+          message: defaultMessage,
+        });
+      },
+    );
+
+    it.each(cases)(
+      "%s should preserve a status carried on the thrown error",
+      async (_name, invoke, mockFn) => {
+        MaintenanceWorkOrder[mockFn].mockRejectedValueOnce({ status: 409, message: "Conflict" });
+
+        await expect(invoke()).rejects.toEqual({ status: 409, message: "Conflict" });
+      },
+    );
+
+    it("getWorkOrderById should surface the 404 AppError status, not a generic 500", async () => {
+      MaintenanceWorkOrder.findOne.mockResolvedValueOnce(null);
+
+      await expect(getWorkOrderById("t-1", "missing")).rejects.toEqual({
+        status: 404,
+        message: "Maintenance work order not found",
+      });
+    });
+  });
 });

@@ -23,9 +23,13 @@ jest.mock("../../services/redis.service", () => ({
   },
 }));
 
+// Mirrors the REAL AppError(status, message) signature from
+// src/utils/appError.util.js. This mock used to declare (message, status) —
+// the arguments reversed — which made a genuinely swapped `new AppError(msg,
+// 400)` call in tenant.service.js look correct and hid the bug.
 jest.mock("../../utils/appError.util", () => ({
   AppError: class AppError extends Error {
-    constructor(message, status) {
+    constructor(status = 500, message = "Internal Server Error") {
       super(message);
       this.status = status;
     }

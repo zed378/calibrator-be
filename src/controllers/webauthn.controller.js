@@ -3,6 +3,11 @@ const { asyncHandler } = require("../utils/controllerWrapper.util");
 const { success } = require("../utils/response.util");
 const { auth } = require("../middlewares/auth.middleware");
 
+exports.getStatus = asyncHandler(async (req, res) => {
+  const result = await webauthnService.getStatus(req.user?.tenantId, req.user?.id);
+  success(res, result, null, "WebAuthn status");
+});
+
 exports.getRegistrationOptions = asyncHandler(async (req, res) => {
   const options = await webauthnService.getRegistrationOptions(req.user);
   success(res, options, null, "WebAuthn registration options");

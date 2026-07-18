@@ -510,4 +510,797 @@ beforeEach(() => {
       expect(key).toBe("ratelimit:auth:login:user:123");
     });
   });
+
+  // ==============================================================
+  // IN-MEMORY STORE TTL EXPIRY
+  // ==============================================================
+  describe("in-memory store expiry", () => {
+    const { logger } = require("../../middlewares/activityLog.middleware");
+
+    it("should treat an entry as absent once its TTL has elapsed", async () => {
+      // login window is 15 minutes
+      await rl.recordAuthFailure({ userId: "ttl-user", endpoint: "login" });
+
+      const before = await rl.getRateLimitStatus({
+        userId: "ttl-user",
+        endpoint: "login",
+        type: "auth",
+      });
+      expect(before.user.count).toBe(1);
+
+      // Jump past the 15-minute window
+      const realNow = Date.now();
+      jest.spyOn(Date, "now").mockReturnValue(realNow + 16 * 60 * 1000);
+
+      const after = await rl.getRateLimitStatus({
+        userId: "ttl-user",
+        endpoint: "login",
+        type: "auth",
+      });
+      expect(after.user).toBeNull();
+
+      // A fresh failure after expiry starts the counter over at 1
+      const result = await rl.recordAuthFailure({
+        userId: "ttl-user",
+        endpoint: "login",
+      });
+      expect(result.remainingAttempts).toBe(4);
+      expect(result.allowed).toBe(true);
+    });
+
+    it("should clear a user lockout once the window expires", async () => {
+      for (let i = 0; i < 5; i++) {
+        await rl.recordAuthFailure({ userId: "ttl-lock", endpoint: "login" });
+      }
+      expect(
+        (await rl.checkAuthLockout({ userId: "ttl-lock", endpoint: "login" })).locked,
+      ).toBe(true);
+
+      const realNow = Date.now();
+      jest.spyOn(Date, "now").mockReturnValue(realNow + 16 * 60 * 1000);
+
+      expect(
+        (await rl.checkAuthLockout({ userId: "ttl-lock", endpoint: "login" })).locked,
+      ).toBe(false);
+    });
+  });
+
+  // ==============================================================
+  // getRateLimitStatus — api type
+  // ==============================================================
+  describe("getRateLimitStatus - api type", () => {
+    it("should use api config and never report isLocked for type=api", async () => {
+      const middleware = rl.endpointRateLimiter("tenantCreate", {
+        maxRequests: 10,
+        windowMs: 60000,
+      });
+      const req = { ip: "9.9.9.9", headers: {}, user: null };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn(), set: jest.fn() };
+      await middleware(req, res, jest.fn());
+
+      const status = await rl.getRateLimitStatus({
+        ip: "9.9.9.9",
+        endpoint: "tenantCreate",
+        type: "api",
+      });
+      expect(status.ip).toEqual({
+        count: 1,
+        expiresAt: expect.any(Date),
+      });
+      expect(status.user).toBeNull();
+      expect(status.token).toBeNull();
+    });
+
+    it("should report isBlocked false for a token that is merely counted", async () => {
+      await rl.recordAuthFailure({ tokenHash: "hash:soft", endpoint: "login" });
+      const status = await rl.getRateLimitStatus({
+        tokenHash: "hash:soft",
+        endpoint: "login",
+        type: "auth",
+      });
+      expect(status.token.isBlocked).toBe(false);
+    });
+
+    it("should report isBlocked true for a hard-blocked token", async () => {
+      for (let i = 0; i < 10; i++) {
+        await rl.recordAuthFailure({ tokenHash: "hash:hard", endpoint: "login" });
+      }
+      const status = await rl.getRateLimitStatus({
+        tokenHash: "hash:hard",
+        endpoint: "login",
+        type: "auth",
+      });
+      expect(status.token.isBlocked).toBe(true);
+    });
+  });
+
+  // ==============================================================
+  // endpointRateLimiter — key selection + fail-open
+  // ==============================================================
+  describe("endpointRateLimiter - key selection", () => {
+    const { logger } = require("../../middlewares/activityLog.middleware");
+
+    const makeRes = () => ({
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn(),
+      set: jest.fn(),
+    });
+
+    it("should track by user id when req.user is authenticated", async () => {
+      const middleware = rl.endpointRateLimiter("tenantCreate", {
+        maxRequests: 10,
+        windowMs: 60000,
+      });
+      const req = { ip: "5.5.5.5", headers: {}, user: { id: "auth-user" } };
+      const next = jest.fn();
+
+      await middleware(req, makeRes(), next);
+      expect(next).toHaveBeenCalled();
+
+      // The user key was incremented, not just the IP key
+      const status = await rl.getRateLimitStatus({
+        userId: "auth-user",
+        endpoint: "tenantCreate",
+        type: "api",
+      });
+      expect(status.user.count).toBe(1);
+    });
+
+    it("should track by token hash when an Authorization header is present", async () => {
+      const middleware = rl.endpointRateLimiter("tenantCreate", {
+        maxRequests: 10,
+        windowMs: 60000,
+      });
+      const req = {
+        ip: "5.5.5.6",
+        headers: { authorization: "Bearer abc123" },
+        user: null,
+      };
+      const next = jest.fn();
+
+      await middleware(req, makeRes(), next);
+      expect(next).toHaveBeenCalled();
+
+      // hashToken is mocked as `hash:${token}`
+      const status = await rl.getRateLimitStatus({
+        tokenHash: "hash:abc123",
+        endpoint: "tenantCreate",
+        type: "api",
+      });
+      expect(status.token.count).toBe(1);
+    });
+
+    it("should set X-RateLimit headers from the first key only", async () => {
+      const middleware = rl.endpointRateLimiter("tenantCreate", {
+        maxRequests: 10,
+        windowMs: 60000,
+      });
+      const req = {
+        ip: "5.5.5.7",
+        headers: { authorization: "Bearer tok" },
+        user: { id: "hdr-user" },
+      };
+      const res = makeRes();
+
+      await middleware(req, res, jest.fn());
+
+      // 3 keys are checked (user, token, ip) but headers are set exactly once
+      expect(res.set).toHaveBeenCalledTimes(1);
+      expect(res.set).toHaveBeenCalledWith({
+        "X-RateLimit-Limit": "10",
+        "X-RateLimit-Remaining": "9",
+        "X-RateLimit-Reset": expect.any(String),
+      });
+    });
+
+    it("should skip user/token/ip keys when the byX options are disabled", async () => {
+      const middleware = rl.endpointRateLimiter("tenantCreate", {
+        maxRequests: 10,
+        windowMs: 60000,
+        byUser: false,
+        byToken: false,
+      });
+      const req = {
+        ip: "5.5.5.8",
+        headers: { authorization: "Bearer skipme" },
+        user: { id: "skip-user" },
+      };
+      const next = jest.fn();
+
+      await middleware(req, makeRes(), next);
+      expect(next).toHaveBeenCalled();
+
+      const status = await rl.getRateLimitStatus({
+        userId: "skip-user",
+        tokenHash: "hash:skipme",
+        ip: "5.5.5.8",
+        endpoint: "tenantCreate",
+        type: "api",
+      });
+      expect(status.user).toBeNull();
+      expect(status.token).toBeNull();
+      expect(status.ip.count).toBe(1);
+    });
+
+    it("should fall back to x-forwarded-for then socket.remoteAddress for the IP", async () => {
+      const middleware = rl.endpointRateLimiter("tenantCreate", {
+        maxRequests: 10,
+        windowMs: 60000,
+        byUser: false,
+        byToken: false,
+      });
+      const req = {
+        headers: {},
+        user: null,
+        socket: { remoteAddress: "7.7.7.7" },
+      };
+      await middleware(req, makeRes(), jest.fn());
+
+      const status = await rl.getRateLimitStatus({
+        ip: "7.7.7.7",
+        endpoint: "tenantCreate",
+        type: "api",
+      });
+      expect(status.ip.count).toBe(1);
+    });
+
+    it("should use the endpoint config defaults when no overrides are given", async () => {
+      // tenantCreate config: maxRequests 10
+      const middleware = rl.endpointRateLimiter("tenantCreate");
+      const req = { ip: "5.5.5.9", headers: {}, user: null };
+      const res = makeRes();
+
+      await middleware(req, res, jest.fn());
+
+      expect(res.set).toHaveBeenCalledWith(
+        expect.objectContaining({ "X-RateLimit-Limit": "10" }),
+      );
+    });
+
+    it("should include retryAfter seconds derived from the window when blocking", async () => {
+      const middleware = rl.endpointRateLimiter("tenantCreate", {
+        maxRequests: 1,
+        windowMs: 60000,
+      });
+      const req = { ip: "5.5.6.0", headers: {}, user: null };
+      const res = makeRes();
+      const next = jest.fn();
+
+      await middleware(req, res, next);
+      await middleware(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(429);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        status: 429,
+        message: "Too many requests. Tenant creation limit exceeded.",
+        retryAfter: 60,
+      });
+      // next() is NOT called for the blocked request
+      expect(next).toHaveBeenCalledTimes(1);
+    });
+
+    it("should fail open and call next() when key building throws", async () => {
+      const middleware = rl.endpointRateLimiter("tenantCreate");
+      // req.headers is undefined -> reading .authorization throws a TypeError
+      const req = { ip: "5.5.6.1", user: null };
+      const res = makeRes();
+      const next = jest.fn();
+
+      await middleware(req, res, next);
+
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(res.status).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("Rate limiter error:"),
+      );
+    });
+  });
+
+  // ==============================================================
+  // authPreCheck
+  // ==============================================================
+  describe("authPreCheck", () => {
+    const { logger } = require("../../middlewares/activityLog.middleware");
+    const { verifyAccessToken } = require("../../utils/jwt.util");
+
+    const makeRes = () => ({
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn(),
+    });
+
+    it("should attach rateLimitContext and call next when not locked", async () => {
+      const middleware = rl.authPreCheck("login");
+      const req = { headers: {}, ip: "2.2.2.1", socket: {} };
+      const res = makeRes();
+      const next = jest.fn();
+
+      await middleware(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(res.status).not.toHaveBeenCalled();
+      expect(req.rateLimitContext).toEqual({
+        userId: null,
+        tokenHash: null,
+        ip: "2.2.2.1",
+        endpoint: "login",
+      });
+    });
+
+    it("should resolve userId from a valid bearer token", async () => {
+      verifyAccessToken.mockReturnValue({ id: "jwt-user" });
+      const middleware = rl.authPreCheck("login");
+      const req = {
+        headers: { authorization: "Bearer good-token" },
+        ip: "2.2.2.2",
+        socket: {},
+      };
+      const next = jest.fn();
+
+      await middleware(req, makeRes(), next);
+
+      expect(verifyAccessToken).toHaveBeenCalledWith("good-token");
+      expect(req.rateLimitContext).toEqual({
+        userId: "jwt-user",
+        tokenHash: "hash:good-token",
+        ip: "2.2.2.2",
+        endpoint: "login",
+      });
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should ignore an invalid token and leave userId null", async () => {
+      verifyAccessToken.mockImplementation(() => {
+        throw new Error("invalid signature");
+      });
+      const middleware = rl.authPreCheck("login");
+      const req = {
+        headers: { authorization: "Bearer bad-token" },
+        ip: "2.2.2.3",
+        socket: {},
+      };
+      const next = jest.fn();
+
+      await middleware(req, makeRes(), next);
+
+      expect(req.rateLimitContext).toEqual({
+        userId: null,
+        tokenHash: "hash:bad-token",
+        ip: "2.2.2.3",
+        endpoint: "login",
+      });
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should respond 429 with lockoutUntil and retryAfter when the user is locked", async () => {
+      verifyAccessToken.mockReturnValue({ id: "locked-jwt-user" });
+      for (let i = 0; i < 5; i++) {
+        await rl.recordAuthFailure({ userId: "locked-jwt-user", endpoint: "login" });
+      }
+
+      const middleware = rl.authPreCheck("login");
+      const req = {
+        headers: { authorization: "Bearer locked" },
+        ip: "2.2.2.4",
+        socket: {},
+      };
+      const res = makeRes();
+      const next = jest.fn();
+
+      await middleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(429);
+      const payload = res.json.mock.calls[0][0];
+      expect(payload.success).toBe(false);
+      expect(payload.status).toBe(429);
+      expect(payload.message).toBe("Account temporarily locked");
+      expect(typeof payload.lockoutUntil).toBe("string");
+      expect(payload.retryAfter).toBeGreaterThan(0);
+    });
+
+    it("should fail open and call next when the pre-check throws", async () => {
+      const middleware = rl.authPreCheck("login");
+      // headers undefined -> reading .authorization throws
+      const req = { ip: "2.2.2.5" };
+      const res = makeRes();
+      const next = jest.fn();
+
+      await middleware(req, res, next);
+
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(res.status).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("Auth pre-check error:"),
+      );
+      expect(req.rateLimitContext).toBeUndefined();
+    });
+  });
+
+  // ==============================================================
+  // authPostFailure
+  // ==============================================================
+  describe("authPostFailure", () => {
+    const { logger } = require("../../middlewares/activityLog.middleware");
+
+    it("should record a failure for a 4xx response", async () => {
+      const middleware = rl.authPostFailure("login");
+      const req = { rateLimitContext: { userId: "pf-user", tokenHash: null, ip: null } };
+      const next = jest.fn();
+
+      await middleware(req, { statusCode: 401 }, next);
+
+      const status = await rl.getRateLimitStatus({
+        userId: "pf-user",
+        endpoint: "login",
+        type: "auth",
+      });
+      expect(status.user.count).toBe(1);
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should not record a failure for a 2xx response", async () => {
+      const middleware = rl.authPostFailure("login");
+      const req = { rateLimitContext: { userId: "pf-ok", tokenHash: null, ip: null } };
+      const next = jest.fn();
+
+      await middleware(req, { statusCode: 200 }, next);
+
+      const status = await rl.getRateLimitStatus({
+        userId: "pf-ok",
+        endpoint: "login",
+        type: "auth",
+      });
+      expect(status.user).toBeNull();
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should not double-count a 429 emitted by the pre-check", async () => {
+      const middleware = rl.authPostFailure("login");
+      const req = { rateLimitContext: { userId: "pf-429", tokenHash: null, ip: null } };
+      const next = jest.fn();
+
+      await middleware(req, { statusCode: 429 }, next);
+
+      const status = await rl.getRateLimitStatus({
+        userId: "pf-429",
+        endpoint: "login",
+        type: "auth",
+      });
+      expect(status.user).toBeNull();
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should not record a failure for a 5xx response", async () => {
+      const middleware = rl.authPostFailure("login");
+      const req = { rateLimitContext: { userId: "pf-500", tokenHash: null, ip: null } };
+      const next = jest.fn();
+
+      await middleware(req, { statusCode: 500 }, next);
+
+      const status = await rl.getRateLimitStatus({
+        userId: "pf-500",
+        endpoint: "login",
+        type: "auth",
+      });
+      expect(status.user).toBeNull();
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should swallow recording errors and still call next", async () => {
+      const middleware = rl.authPostFailure("login");
+      // A userId whose string coercion throws makes makeKey() blow up inside
+      // recordAuthFailure, so the middleware's catch is exercised.
+      const req = {
+        rateLimitContext: {
+          userId: {
+            toString() {
+              throw new Error("boom");
+            },
+          },
+        },
+      };
+      const next = jest.fn();
+
+      await middleware(req, { statusCode: 401 }, next);
+
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("Auth post-failure recording error:"),
+      );
+    });
+  });
+
+  // ==============================================================
+  // authPostSuccess
+  // ==============================================================
+  describe("authPostSuccess", () => {
+    const { logger } = require("../../middlewares/activityLog.middleware");
+
+    it("should reset counters on a 200 response", async () => {
+      await rl.recordAuthFailure({ userId: "ps-user", endpoint: "login" });
+      expect(
+        (await rl.getRateLimitStatus({ userId: "ps-user", endpoint: "login", type: "auth" }))
+          .user.count,
+      ).toBe(1);
+
+      const middleware = rl.authPostSuccess("login");
+      const req = { rateLimitContext: { userId: "ps-user", tokenHash: null } };
+      const next = jest.fn();
+
+      await middleware(req, { statusCode: 200 }, next);
+
+      const status = await rl.getRateLimitStatus({
+        userId: "ps-user",
+        endpoint: "login",
+        type: "auth",
+      });
+      expect(status.user).toBeNull();
+      expect(mockUsers.update).toHaveBeenCalledWith(
+        { failedLoginAttempts: 0, lockedUntil: null },
+        { where: { id: "ps-user" } },
+      );
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should not reset counters on a non-200 response", async () => {
+      await rl.recordAuthFailure({ userId: "ps-401", endpoint: "login" });
+
+      const middleware = rl.authPostSuccess("login");
+      const req = { rateLimitContext: { userId: "ps-401", tokenHash: null } };
+      const next = jest.fn();
+
+      await middleware(req, { statusCode: 401 }, next);
+
+      const status = await rl.getRateLimitStatus({
+        userId: "ps-401",
+        endpoint: "login",
+        type: "auth",
+      });
+      expect(status.user.count).toBe(1);
+      expect(mockUsers.update).not.toHaveBeenCalled();
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should do nothing when there is no rateLimitContext", async () => {
+      const middleware = rl.authPostSuccess("login");
+      const next = jest.fn();
+
+      await middleware({}, { statusCode: 200 }, next);
+
+      expect(mockUsers.update).not.toHaveBeenCalled();
+      expect(next).toHaveBeenCalled();
+    });
+
+    it("should swallow reset errors and still call next", async () => {
+      const middleware = rl.authPostSuccess("login");
+      const req = {
+        rateLimitContext: {
+          userId: {
+            toString() {
+              throw new Error("boom");
+            },
+          },
+        },
+      };
+      const next = jest.fn();
+
+      await middleware(req, { statusCode: 200 }, next);
+
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("Auth post-success reset error:"),
+      );
+    });
+  });
+
+  // ==============================================================
+  // recordAuthFailure — combined identifiers
+  // ==============================================================
+  describe("recordAuthFailure - combined identifiers", () => {
+    it("should persist the lockout to the Users table when a user locks out", async () => {
+      for (let i = 0; i < 5; i++) {
+        await rl.recordAuthFailure({ userId: "persist-user", endpoint: "login" });
+      }
+
+      expect(mockUsers.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          failedLoginAttempts: 5,
+          lockedUntil: expect.any(Date),
+        }),
+        { where: { id: "persist-user" } },
+      );
+    });
+
+    it("should skip the IP fallback when a userId is present", async () => {
+      await rl.recordAuthFailure({
+        userId: "combo-user",
+        ip: "3.3.3.1",
+        endpoint: "login",
+      });
+
+      const status = await rl.getRateLimitStatus({
+        userId: "combo-user",
+        ip: "3.3.3.1",
+        endpoint: "login",
+        type: "auth",
+      });
+      expect(status.user.count).toBe(1);
+      expect(status.ip).toBeNull();
+    });
+
+    it("should skip the IP fallback when a tokenHash is present", async () => {
+      await rl.recordAuthFailure({
+        tokenHash: "hash:combo",
+        ip: "3.3.3.2",
+        endpoint: "login",
+      });
+
+      const status = await rl.getRateLimitStatus({
+        tokenHash: "hash:combo",
+        ip: "3.3.3.2",
+        endpoint: "login",
+        type: "auth",
+      });
+      expect(status.token.count).toBe(1);
+      expect(status.ip).toBeNull();
+    });
+
+    it("should preserve firstAttempt across repeated failures", async () => {
+      const realNow = Date.now();
+      jest.spyOn(Date, "now").mockReturnValue(realNow);
+      await rl.recordAuthFailure({ userId: "first-user", endpoint: "login" });
+
+      Date.now.mockReturnValue(realNow + 1000);
+      for (let i = 0; i < 4; i++) {
+        await rl.recordAuthFailure({ userId: "first-user", endpoint: "login" });
+      }
+
+      // checkAuthLockout derives lockoutUntil from firstAttempt + lockoutMs
+      const lockout = await rl.checkAuthLockout({
+        userId: "first-user",
+        endpoint: "login",
+      });
+      expect(lockout.locked).toBe(true);
+      expect(lockout.lockoutUntil.getTime()).toBe(realNow + 15 * 60 * 1000);
+    });
+
+    it("should use the register config for the register endpoint", async () => {
+      const result = await rl.recordAuthFailure({
+        userId: "reg-user",
+        endpoint: "register",
+      });
+      // register: maxAttempts 3
+      expect(result.remainingAttempts).toBe(2);
+    });
+  });
+
+  // ==============================================================
+  // checkAuthLockout / isTokenBlocked / isUserLockedOut edges
+  // ==============================================================
+  describe("lockout query edges", () => {
+    it("should report remainingAttempts for a partially failed user", async () => {
+      await rl.recordAuthFailure({ userId: "partial", endpoint: "login" });
+      await rl.recordAuthFailure({ userId: "partial", endpoint: "login" });
+
+      const result = await rl.isUserLockedOut("partial", "login");
+      expect(result.isLocked).toBe(false);
+      expect(result.remainingAttempts).toBe(3);
+    });
+
+    it("should report full remainingAttempts for an unknown user", async () => {
+      const result = await rl.isUserLockedOut("unknown-user", "login");
+      expect(result).toEqual({ isLocked: false, remainingAttempts: 5 });
+    });
+
+    it("should not report a locked-out user once the entry has expired", async () => {
+      for (let i = 0; i < 5; i++) {
+        await rl.recordAuthFailure({ userId: "expired-lock", endpoint: "login" });
+      }
+      const realNow = Date.now();
+      jest.spyOn(Date, "now").mockReturnValue(realNow + 16 * 60 * 1000);
+
+      const result = await rl.isUserLockedOut("expired-lock", "login");
+      expect(result.isLocked).toBe(false);
+      expect(result.remainingAttempts).toBe(5);
+    });
+
+    it("should not report a blocked token once the entry has expired", async () => {
+      for (let i = 0; i < 10; i++) {
+        await rl.recordAuthFailure({ tokenHash: "hash:exp-block", endpoint: "login" });
+      }
+      expect((await rl.isTokenBlocked("exp-block", "login")).isBlocked).toBe(true);
+
+      const realNow = Date.now();
+      jest.spyOn(Date, "now").mockReturnValue(realNow + 16 * 60 * 1000);
+
+      expect((await rl.isTokenBlocked("exp-block", "login")).isBlocked).toBe(false);
+    });
+
+    it("should return locked false when a token exists but is not revoked", async () => {
+      await rl.recordAuthFailure({ tokenHash: "hash:notrevoked", endpoint: "login" });
+      const result = await rl.checkAuthLockout({
+        tokenHash: "hash:notrevoked",
+        endpoint: "login",
+      });
+      expect(result).toEqual({ locked: false });
+    });
+
+    it("should return locked false when an IP exists but is under the limit", async () => {
+      await rl.recordAuthFailure({ ip: "4.4.4.1", endpoint: "login" });
+      const result = await rl.checkAuthLockout({ ip: "4.4.4.1", endpoint: "login" });
+      expect(result).toEqual({ locked: false });
+    });
+
+    it("should skip the IP branch of checkAuthLockout when a userId is given", async () => {
+      for (let i = 0; i < 15; i++) {
+        await rl.recordAuthFailure({ ip: "4.4.4.2", endpoint: "login" });
+      }
+      // IP alone is blocked, but supplying a clean userId skips the IP branch
+      const result = await rl.checkAuthLockout({
+        userId: "clean-user",
+        ip: "4.4.4.2",
+        endpoint: "login",
+      });
+      expect(result).toEqual({ locked: false });
+    });
+  });
+
+  // ==============================================================
+  // clearUserRateLimits / clearMemoryStore
+  // ==============================================================
+  describe("clearUserRateLimits", () => {
+    it("should return early without logging when no userId is given", async () => {
+      const { logger } = require("../../middlewares/activityLog.middleware");
+      await expect(rl.clearUserRateLimits(null)).resolves.toBeUndefined();
+      expect(logger.info).not.toHaveBeenCalled();
+    });
+
+    it("should clear both auth and api counters for the user", async () => {
+      await rl.recordAuthFailure({ userId: "multi", endpoint: "login" });
+      await rl.recordAuthFailure({ userId: "multi", endpoint: "register" });
+
+      await rl.clearUserRateLimits("multi");
+
+      expect(
+        (await rl.getRateLimitStatus({ userId: "multi", endpoint: "login", type: "auth" }))
+          .user,
+      ).toBeNull();
+      expect(
+        (await rl.getRateLimitStatus({ userId: "multi", endpoint: "register", type: "auth" }))
+          .user,
+      ).toBeNull();
+    });
+  });
+
+  describe("revokeAllUserTokens", () => {
+    it("should return 0 when no sessions matched", async () => {
+      mockSessions.update.mockResolvedValueOnce([0]);
+      await expect(rl.revokeAllUserTokens("nobody", "REASON")).resolves.toBe(0);
+    });
+
+    it("should default the reason to SECURITY_REVOCATION", async () => {
+      mockSessions.update.mockResolvedValueOnce([1]);
+      await rl.revokeAllUserTokens("user-default");
+      expect(mockSessions.update).toHaveBeenCalledWith(
+        expect.objectContaining({ revokedReason: "SECURITY_REVOCATION" }),
+        { where: { userId: "user-default", isRevoked: false } },
+      );
+    });
+  });
+
+  describe("revokeTokenByHash", () => {
+    it("should return false when no session row was affected", async () => {
+      mockSessions.update.mockResolvedValueOnce([0]);
+      await expect(rl.revokeTokenByHash("hash:none")).resolves.toBe(false);
+    });
+
+    it("should default the reason to RATE_LIMIT_EXCEEDED", async () => {
+      await rl.revokeTokenByHash("hash:default-reason");
+      expect(mockSessions.update).toHaveBeenCalledWith(
+        expect.objectContaining({ revokedReason: "RATE_LIMIT_EXCEEDED" }),
+        { where: { tokenHash: "hash:default-reason", isRevoked: false } },
+      );
+    });
+  });
 });

@@ -5,6 +5,7 @@ const {
   createKeyPair,
   createWorkflow,
   signDocument,
+  verifySignature,
   revokeSignature,
   validate,
 } = require("../../validators/eSignature.validator");
@@ -259,51 +260,68 @@ describe("E-Signature Validators", () => {
   });
 
   describe("signDocument", () => {
+    // stepId identifies the workflow step being signed. It lives in the body
+    // because POST /sign has no path param — the controller used to read
+    // req.params.stepId, which was always undefined.
+    const STEP_ID = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
+
     it("should validate with default authentication method", () => {
-      const value = validate({}, signDocument);
+      const value = validate({ stepId: STEP_ID }, signDocument);
 
       expect(value.authenticationMethod).toBe("password");
+      expect(value.stepId).toBe(STEP_ID);
+    });
+
+    it("should reject a missing stepId", () => {
+      expect(() => validate({}, signDocument)).toThrow();
+    });
+
+    it("should reject a stepId that is not a uuid", () => {
+      expect(() => validate({ stepId: "not-a-uuid" }, signDocument)).toThrow();
     });
 
     it("should validate with password method", () => {
       expect(() =>
-        validate({ authenticationMethod: "password" }, signDocument),
+        validate({ stepId: STEP_ID, authenticationMethod: "password" }, signDocument),
       ).not.toThrow();
     });
 
     it("should validate with mfa method", () => {
       expect(() =>
-        validate({ authenticationMethod: "mfa" }, signDocument),
+        validate({ stepId: STEP_ID, authenticationMethod: "mfa" }, signDocument),
       ).not.toThrow();
     });
 
     it("should validate with webauthn method", () => {
       expect(() =>
-        validate({ authenticationMethod: "webauthn" }, signDocument),
+        validate({ stepId: STEP_ID, authenticationMethod: "webauthn" }, signDocument),
       ).not.toThrow();
     });
 
     it("should validate with totp method", () => {
       expect(() =>
-        validate({ authenticationMethod: "totp" }, signDocument),
+        validate({ stepId: STEP_ID, authenticationMethod: "totp" }, signDocument),
       ).not.toThrow();
     });
 
     it("should validate with polygon data", () => {
       expect(() =>
-        validate({ polygon: { x: 10, y: 20, width: 100, height: 50 } }, signDocument),
+        validate(
+          { stepId: STEP_ID, polygon: { x: 10, y: 20, width: 100, height: 50 } },
+          signDocument,
+        ),
       ).not.toThrow();
     });
 
     it("should validate with null polygon", () => {
       expect(() =>
-        validate({ polygon: null }, signDocument),
+        validate({ stepId: STEP_ID, polygon: null }, signDocument),
       ).not.toThrow();
     });
 
     it("should validate with biometric data", () => {
       expect(() =>
-        validate({ biometricData: "abc123" }, signDocument),
+        validate({ stepId: STEP_ID, biometricData: "abc123" }, signDocument),
       ).not.toThrow();
     });
 
@@ -311,6 +329,7 @@ describe("E-Signature Validators", () => {
       expect(() =>
         validate(
           {
+            stepId: STEP_ID,
             polygon: { x: 10, y: 20 },
             biometricData: "xyz",
             authenticationMethod: "mfa",
@@ -324,7 +343,27 @@ describe("E-Signature Validators", () => {
 
     it("should reject invalid authentication method", () => {
       expect(() =>
-        validate({ authenticationMethod: "sms" }, signDocument),
+        validate({ stepId: STEP_ID, authenticationMethod: "sms" }, signDocument),
+      ).toThrow();
+    });
+  });
+
+  describe("verifySignature", () => {
+    const SIGNATURE_ID = "3f2504e0-4f89-11d3-9a0c-0305e82c3302";
+
+    it("should validate a uuid signatureId", () => {
+      const value = validate({ signatureId: SIGNATURE_ID }, verifySignature);
+
+      expect(value.signatureId).toBe(SIGNATURE_ID);
+    });
+
+    it("should reject a missing signatureId", () => {
+      expect(() => validate({}, verifySignature)).toThrow();
+    });
+
+    it("should reject a signatureId that is not a uuid", () => {
+      expect(() =>
+        validate({ signatureId: "nope" }, verifySignature),
       ).toThrow();
     });
   });

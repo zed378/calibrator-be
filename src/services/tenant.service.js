@@ -565,9 +565,12 @@ exports.deleteTenant = async (tenantId, deletedBy) => {
 
     if (userCount > 0) {
       await transaction.rollback();
+      // AppError is (status, message) — the arguments were swapped here, so
+      // this surfaced with .status set to the message string and .message set
+      // to 400, producing a garbage HTTP status instead of a 400.
       throw new AppError(
-        `Cannot delete tenant with ${userCount} active user(s). Please remove or reassign users first.`,
         400,
+        `Cannot delete tenant with ${userCount} active user(s). Please remove or reassign users first.`,
       );
     }
 
