@@ -40,6 +40,19 @@ describe("finance.service", () => {
       expect(dep.fullyDepreciated).toBe(false);
     });
 
+    it("treats a missing purchase price and useful life as 0 and 1 year", () => {
+      const dep = financeService.computeDepreciation(
+        { purchaseDate: "2020-01-01", depreciationMethod: "straight_line" },
+        new Date("2021-01-01"),
+      );
+      expect(dep.annualDepreciation).toBe(0);
+      expect(dep.accumulatedDepreciation).toBe(0);
+      expect(dep.bookValue).toBe(0);
+      // life defaulted to 1 year, so a 1-year-old asset is fully depreciated
+      expect(dep.ageYears).toBe(1);
+      expect(dep.fullyDepreciated).toBe(true);
+    });
+
     it("straight line: never depreciates below salvage value", () => {
       const asOf = new Date("2040-01-01"); // way past useful life
       const dep = financeService.computeDepreciation(baseRecord, asOf);
@@ -111,6 +124,18 @@ describe("finance.service", () => {
       expect(result.data.meta.total).toBe(1);
       expect(AssetFinance.findAndCountAll).toHaveBeenCalledWith(
         expect.objectContaining({ where: { tenantId: "t1" } }),
+      );
+    });
+
+    it("falls back to the default limit when limit is not a usable number", async () => {
+      AssetFinance.findAndCountAll.mockResolvedValue({ count: 0, rows: [] });
+      await financeService.fetchAssetFinances({
+        tenantId: "t1",
+        page: 1,
+        limit: "not-a-number",
+      });
+      expect(AssetFinance.findAndCountAll).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: 25, offset: 0 }),
       );
     });
 
@@ -271,6 +296,15 @@ describe("finance.service", () => {
       expect(result.data.totals.totalBookValue).toBeLessThan(15000);
       expect(result.data.rows[0].deviceName).toBe("Ventilator A");
       expect(result.data.csv.split("\n")).toHaveLength(3);
+    });
+
+    it("defaults to an empty options object and reports as of now", async () => {
+      AssetFinance.findAll.mockResolvedValue([]);
+      const result = await financeService.getDepreciationReport("t1");
+      expect(result.status).toBe(200);
+      expect(result.data.count).toBe(0);
+      expect(result.data.totals.totalPurchase).toBe(0);
+      expect(AssetFinance.findAll).toHaveBeenCalledTimes(1);
     });
 
     it("handles missing device relation gracefully", async () => {

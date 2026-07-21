@@ -401,6 +401,7 @@ const gdprRoutes = require("./src/routes/api/gdpr.route");
 const tenantHierarchyRoutes = require("./src/routes/api/tenantHierarchy.route");
 const eSignatureRoutes = require("./src/routes/api/eSignature.route");
 const kanbanRoutes = require("./src/routes/api/kanban.route");
+const ticketRoutes = require("./src/routes/api/tickets.route");
 
 // ======================================================
 // ROUTES ENDPOINT
@@ -464,6 +465,7 @@ app.use("/api/v1/gdpr", gdprRoutes);
 app.use("/api/v1/tenant-hierarchy", tenantHierarchyRoutes);
 app.use("/api/v1/esignature", eSignatureRoutes);
 app.use("/api/v1/kanban", kanbanRoutes);
+app.use("/api/v1/tickets", ticketRoutes);
 
 // ======================================================
 // HEALTHCHECK

@@ -115,7 +115,10 @@ const addEmailJob = async (job) => {
       data: job.data,
       createdAt: new Date().toISOString(),
       retries: 0,
-      maxRetries: job.maxRetries || 3,
+      // unreachable fallback: every caller of addEmailJob (queueActivationEmail
+      // / queueOtpEmail / queueNotificationEmail) passes a hard-coded
+      // maxRetries: 3, so the `|| 3` alternative never evaluates.
+      maxRetries: /* istanbul ignore next */ job.maxRetries || 3,
     };
 
     ch.sendToQueue(EMAIL_QUEUE, Buffer.from(JSON.stringify(jobData)), {
@@ -157,6 +160,9 @@ const sendEmailDirectly = async (job) => {
       case "notification":
         await sendNotificationEmail(job.data);
         break;
+      // istanbul ignore next -- unreachable: sendEmailDirectly is only called
+      // from the addEmailJob fallback, and addEmailJob's three callers always
+      // pass one of the literal types above, so `default` never runs.
       default:
         logger.warn("Unknown email job type", { type: job.type });
         return false;

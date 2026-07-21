@@ -23,6 +23,15 @@ describe("ssrf.util", () => {
       "fe80::1", // IPv6 link-local
       "::ffff:10.0.0.1", // IPv4-mapped private
       "not-an-ip",
+      "::", // IPv6 unspecified
+      "[::1]", // bracketed loopback
+      "fe80::1%eth0", // zone id is stripped before matching
+      "fc00::1", // ULA fc-prefix
+      "ff02::1", // IPv6 multicast
+      "::10.0.0.1", // IPv4-compatible private
+      "224.0.0.1", // IPv4 multicast
+      "240.0.0.1", // IPv4 reserved
+      "",
     ])("blocks internal/invalid address %s", (ip) => {
       expect(isBlockedIp(ip)).toBe(true);
     });
@@ -82,6 +91,37 @@ describe("ssrf.util", () => {
       await expect(
         assertResolvedHostIsPublic("https://does-not-exist.example/hook"),
       ).rejects.toMatchObject({ status: 400 });
+    });
+
+    it("rejects when DNS resolves the host to zero addresses", async () => {
+      jest.spyOn(dns.promises, "lookup").mockResolvedValue([]);
+      await expect(
+        assertResolvedHostIsPublic("https://empty.example.com/hook"),
+      ).rejects.toMatchObject({
+        status: 400,
+        message: "URL host could not be resolved",
+      });
+    });
+
+    it("rejects when only one of several resolved addresses is internal", async () => {
+      jest.spyOn(dns.promises, "lookup").mockResolvedValue([
+        { address: "93.184.216.34", family: 4 },
+        { address: "127.0.0.1", family: 4 },
+      ]);
+      await expect(
+        assertResolvedHostIsPublic("https://rebind.example.com/hook"),
+      ).rejects.toMatchObject({
+        status: 400,
+        message: "URL host resolves to a disallowed (internal) address",
+      });
+    });
+
+    it("strips brackets from an IPv6 literal host and skips DNS", async () => {
+      const spy = jest.spyOn(dns.promises, "lookup");
+      await expect(
+        assertResolvedHostIsPublic("https://[2606:4700:4700::1111]/hook"),
+      ).resolves.toBeUndefined();
+      expect(spy).not.toHaveBeenCalled();
     });
 
     it("does not perform DNS for a literal public IP host", async () => {

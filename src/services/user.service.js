@@ -166,6 +166,9 @@ exports.fetchUsers = async ({
 
     const totalPages = Math.ceil(data.count / safeLimit);
 
+    /* istanbul ignore else -- transaction is assigned from db.transaction()
+       above, which either yields a transaction or throws (that throw path is
+       covered separately), so it is always truthy here. */
     if (transaction) {
       await transaction.commit();
     }

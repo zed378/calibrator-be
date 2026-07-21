@@ -14,8 +14,15 @@ exports.createScorecard = asyncHandlerWithMapping(
 
 exports.getScorecards = asyncHandlerWithMapping(
   async (req, res) => {
-    const data = await scorecardService.getScorecards(req.user.tenantId, req.query);
-    success(res, data, null, "Scorecards retrieved successfully", 200);
+    // House style: rows in `data` (top-level array), pagination in `meta`.
+    // The whole { rows, total, ... } object used to sit in `data`, so the
+    // frontend list (reads `data` as an array) always rendered empty.
+    const { rows, total, page, totalPages } = await scorecardService.getScorecards(
+      req.user.tenantId,
+      req.query,
+    );
+    const limit = parseInt(req.query.limit, 10) || 10;
+    success(res, rows, { total, page, limit, totalPages }, "Scorecards retrieved successfully", 200);
   },
   {}
 );

@@ -39,6 +39,8 @@ const BLOCKED_IPV4 = [
   ["224.0.0.0", 4],
   ["240.0.0.0", 4],
 ].map(([base, bits]) => {
+  // istanbul ignore next -- unreachable: BLOCKED_IPV4 contains no /0 entry, so
+  // `bits === 0` is never true; the branch is a defensive guard only.
   const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
   // Force unsigned (>>> 0): the bitwise & yields a signed 32-bit int, which for
   // ranges with a high first octet (e.g. 192.x, 172.x, 169.254.x) would be

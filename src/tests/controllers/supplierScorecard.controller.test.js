@@ -23,7 +23,7 @@ jest.mock("../../utils/response.util", () => ({
 
 const scorecardService = require("../../services/supplierScorecard.service");
 const supplierScorecardController = require("../../controllers/supplierScorecard.controller");
-const { error: sendError } = require("../../utils/response.util");
+const { error: sendError, success } = require("../../utils/response.util");
 
 const VALID_TENANT_ID = "550e8400-e29b-41d4-a716-446655440002";
 const VALID_USER_ID = "550e8400-e29b-41d4-a716-446655440001";
@@ -57,11 +57,44 @@ describe("supplierScorecard Controller", () => {
   });
 
   describe("getScorecards", () => {
-    it("should return scorecards", async () => {
-      scorecardService.getScorecards.mockResolvedValue([]);
-      req.query = { page: "1", limit: "10" };
+    it("reshapes the paged result into rows + top-level meta", async () => {
+      scorecardService.getScorecards.mockResolvedValue({
+        rows: [{ id: VALID_SC_ID }],
+        total: 5,
+        page: 2,
+        totalPages: 3,
+      });
+      req.query = { page: "2", limit: "2" };
+
       await supplierScorecardController.getScorecards(req, res, next);
-      expect(sendError).not.toHaveBeenCalled();
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        [{ id: VALID_SC_ID }],
+        { total: 5, page: 2, limit: 2, totalPages: 3 },
+        "Scorecards retrieved successfully",
+        200,
+      );
+    });
+
+    it("defaults limit to 10 when the query omits it", async () => {
+      scorecardService.getScorecards.mockResolvedValue({
+        rows: [],
+        total: 0,
+        page: 1,
+        totalPages: 0,
+      });
+      req.query = {};
+
+      await supplierScorecardController.getScorecards(req, res, next);
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        [],
+        { total: 0, page: 1, limit: 10, totalPages: 0 },
+        "Scorecards retrieved successfully",
+        200,
+      );
     });
   });
 

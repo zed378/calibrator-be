@@ -12,8 +12,16 @@ exports.createRisk = asyncHandlerWithMapping(
 
 exports.getRisks = asyncHandlerWithMapping(
   async (req, res) => {
-    const data = await riskService.getRisks(req.user.tenantId, req.query);
-    success(res, data, null, "Risks retrieved successfully", 200);
+    // House style: rows go in `data` (a top-level array) and pagination in the
+    // `meta` sibling. Previously the whole { rows, total, ... } object sat in
+    // `data`, so the frontend (which reads `data` as an array) always rendered
+    // an empty list and lost pagination.
+    const { rows, total, page, totalPages } = await riskService.getRisks(
+      req.user.tenantId,
+      req.query,
+    );
+    const limit = parseInt(req.query.limit, 10) || 10;
+    success(res, rows, { total, page, limit, totalPages }, "Risks retrieved successfully", 200);
   },
   {}
 );

@@ -188,6 +188,10 @@
       "description": "Tenant-scoped analytics and reporting"
     },
     {
+      "name": "Tickets",
+      "description": "Support / help-desk tickets (raise, triage, assign, discuss, resolve)"
+    },
+    {
       "name": "UserPermissions",
       "description": "Per-user permission overrides (role inheritance + custom grants/denies)"
     },
@@ -16376,6 +16380,72 @@
           },
           "401": {
             "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/v1/tickets": {
+      "get": {
+        "summary": "List tickets in the caller's tenant (filterable)",
+        "tags": [
+          "Tickets"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tickets retrieved"
+          }
+        }
+      },
+      "post": {
+        "summary": "Raise a new ticket",
+        "tags": [
+          "Tickets"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Ticket created"
+          }
+        }
+      }
+    },
+    "/api/v1/tickets/{ticketId}": {
+      "get": {
+        "summary": "Get a ticket with its comment thread",
+        "tags": [
+          "Tickets"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ticketId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ticket retrieved"
           },
           "404": {
             "description": "Not found"

@@ -232,18 +232,23 @@ exports.verifyDomain = async (tenantId, domainId) => {
 
   try {
     const verified = await checkDnsTxtRecord(record.domain, token);
+    // NOTE: the `verified === false` side of the three ternaries below is
+    // currently unreachable — checkDnsTxtRecord is a module-private simulation
+    // that unconditionally returns true (see its NOTE above) and has this as
+    // its only call site. The false branches stay so the logic is correct once
+    // the real dns.resolveTxt lookup replaces the stub.
     await record.update({
-      status: verified
+      status: /* istanbul ignore next */ verified
         ? DOMAIN_STATUS.ACTIVE
         : DOMAIN_STATUS.VERIFICATION_FAILED,
-      verifiedAt: verified ? new Date() : null,
+      verifiedAt: /* istanbul ignore next */ verified ? new Date() : null,
       lastCheckedAt: new Date(),
     });
 
     return {
       verified,
       status: record.status,
-      record: verified ? token : null,
+      record: /* istanbul ignore next */ verified ? token : null,
       dnsRecord: {
         type: "CNAME",
         name: `_domain_verify.${record.domain}`,

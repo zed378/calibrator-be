@@ -29,6 +29,9 @@ const formatScimUser = (user) => ({
   },
 });
 
+// The `members = []` default is unreachable: all five call sites in this module
+// pass an explicit members array.
+/* istanbul ignore next */
 const formatScimGroup = (group, members = []) => ({
   schemas: [SCIM_GROUP_SCHEMA],
   id: group.id,

@@ -96,6 +96,19 @@ describe("dataRetention.service", () => {
       expect(result.reason).toBe(" litigation");
     });
 
+    it("stores a default reason when none is supplied", async () => {
+      TenantSettings.upsert.mockResolvedValue({});
+      const result = await dataRetention.enableLegalHold("t1", "user-1");
+
+      expect(TenantSettings.upsert).toHaveBeenCalledWith({
+        tenantId: "t1",
+        key: "legal_hold_reason",
+        value: "Legal hold enabled",
+      });
+      expect(result.enabled).toBe(true);
+      expect(result.reason).toBeUndefined();
+    });
+
     it("disables legal hold", async () => {
       TenantSettings.destroy.mockResolvedValue(3);
       const result = await dataRetention.disableLegalHold("t1", "user-1");
@@ -123,6 +136,19 @@ describe("dataRetention.service", () => {
       const result = await dataRetention.purgeExpiredRecords("t1");
       expect(result.skipped).toBe(true);
       expect(result.reason).toBe("legal_hold");
+    });
+
+    it("omits entities from the result when nothing was deleted", async () => {
+      TenantSettings.findOne.mockResolvedValue(null);
+      TenantSettings.findAll.mockResolvedValue([]);
+      AuditLog.destroy.mockResolvedValue(0);
+      Notification.destroy.mockResolvedValue(0);
+      Session.destroy.mockResolvedValue(0);
+
+      const result = await dataRetention.purgeExpiredRecords("t1");
+
+      expect(result.skipped).toBe(false);
+      expect(result.purged).toEqual({});
     });
 
     it("skips purge for an entity if retention days <= 0", async () => {
@@ -214,6 +240,22 @@ describe("dataRetention.service", () => {
           id: expect.any(String),
         })
       );
+      expect(result.anonymized).toBe(1);
+    });
+
+    it("preserves ids and dates by default", async () => {
+      TenantSettings.findOne.mockResolvedValue(null);
+      const mockRecord = { update: jest.fn().mockResolvedValue({}) };
+      User.findAll.mockResolvedValue([mockRecord]);
+
+      const result = await dataRetention.anonymizeDataset("t1", "users");
+
+      expect(mockRecord.update).toHaveBeenCalledWith({
+        email: "[ANONYMIZED]",
+      });
+      const passed = mockRecord.update.mock.calls[0][0];
+      expect(passed).not.toHaveProperty("id");
+      expect(passed).not.toHaveProperty("createdAt");
       expect(result.anonymized).toBe(1);
     });
   });

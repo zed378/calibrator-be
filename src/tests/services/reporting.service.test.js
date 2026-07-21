@@ -23,6 +23,74 @@ describe("reporting.service", () => {
       expect(lines[1]).toBe('x,"y,z"');
       expect(lines[2]).toBe('"q""q",1');
     });
+
+    // These reports export user-controlled text (device names, stock item
+    // names). Excel/LibreOffice/Sheets evaluate a cell that begins with
+    // = + - @ tab or CR, so an exported name like `=cmd|'/c calc'!A1` would
+    // run on open. Quoting does NOT prevent evaluation — the value has to be
+    // prefixed so the cell is read as text.
+    it.each([
+      ["=cmd|'/c calc'!A1", "'=cmd|'/c calc'!A1"], // DDE payload
+      ["=1+1", "'=1+1"],
+      ["+1+1", "'+1+1"],
+      ["-1+1", "'-1+1"],
+      ["\tSUM(1)", "'\tSUM(1)"],
+    ])("neutralises the formula-triggering value %j", (input, expected) => {
+      const csv = reporting.toCsv([{ key: "a", label: "A" }], [{ a: input }]);
+      expect(csv.split("\n")[1]).toBe(expected);
+    });
+
+    it("still quotes a formula value that also contains a delimiter", () => {
+      // Quoting and the text-prefix must combine, not replace one another.
+      const csv = reporting.toCsv(
+        [{ key: "a", label: "A" }],
+        [{ a: "@SUM(1,2)" }],
+      );
+      expect(csv.split("\n")[1]).toBe(`"'@SUM(1,2)"`);
+    });
+
+    // The guard must not corrupt real data: a negative quantity is a number,
+    // not an attack.
+    it.each([
+      ["-5", "-5"],
+      ["-5.25", "-5.25"],
+      [-42, "-42"],
+      ["12", "12"],
+    ])("leaves the plain number %j untouched", (input, expected) => {
+      const csv = reporting.toCsv([{ key: "a", label: "A" }], [{ a: input }]);
+      expect(csv.split("\n")[1]).toBe(expected);
+    });
+
+    it("leaves an ordinary value untouched (no prefix, no quotes)", () => {
+      const csv = reporting.toCsv(
+        [{ key: "a", label: "A" }],
+        [{ a: "Widget" }],
+      );
+      expect(csv.split("\n")[1]).toBe("Widget");
+    });
+
+    // A bare CR terminates a row in several parsers, so it must be quoted
+    // exactly like \n.
+    it("quotes a value containing a carriage return", () => {
+      const csv = reporting.toCsv(
+        [{ key: "a", label: "A" }],
+        [{ a: "line1\rline2" }],
+      );
+      expect(csv.split("\n")[1]).toBe('"line1\rline2"');
+    });
+
+    it("renders null and undefined as empty cells", () => {
+      const csv = reporting.toCsv(
+        [{ key: "a", label: "A" }, { key: "b", label: "B" }],
+        [{ a: null, b: undefined }],
+      );
+      expect(csv.split("\n")[1]).toBe(",");
+    });
+
+    it("treats a missing rows argument as no rows", () => {
+      const csv = reporting.toCsv([{ key: "a", label: "A" }], undefined);
+      expect(csv).toBe("A\n");
+    });
   });
 
   describe("getInventory", () => {

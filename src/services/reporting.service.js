@@ -39,9 +39,28 @@ const groupCount = async (Model, tenantId, attribute) => {
 // ------------------------------------------------------------------
 // CSV
 // ------------------------------------------------------------------
+// Cells beginning with one of these are evaluated as a formula by Excel,
+// LibreOffice and Google Sheets — including DDE payloads such as
+// `=cmd|'/c calc'!A1`. Reports export user-controlled text (device names, stock
+// item names), so a value has to be neutralised before it reaches a spreadsheet.
+// Quoting alone does NOT help: a quoted cell is still evaluated.
+const CSV_FORMULA_PREFIX = /^[=+\-@\t\r]/;
+
+// Genuine numbers must survive intact — "-5" is a quantity, not an attack.
+const CSV_PLAIN_NUMBER = /^-?\d+(\.\d+)?$/;
+
 const csvEscape = (v) => {
   const s = v === null || v === undefined ? "" : String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+
+  // Prefix a single quote to force the cell to be read as text.
+  const guarded =
+    CSV_FORMULA_PREFIX.test(s) && !CSV_PLAIN_NUMBER.test(s) ? `'${s}` : s;
+
+  // Quote on delimiter, quote char, or ANY newline — a bare \r terminates a
+  // row in several parsers, so it has to be inside quotes like \n.
+  return /[",\r\n]/.test(guarded)
+    ? `"${guarded.replace(/"/g, '""')}"`
+    : guarded;
 };
 
 // headers: [{ key, label }]

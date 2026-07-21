@@ -63,11 +63,45 @@ describe("risk Controller", () => {
   });
 
   describe("getRisks", () => {
-    it("should return risks", async () => {
-      riskService.getRisks.mockResolvedValue([]);
-      req.query = { page: "1", limit: "10" };
+    it("reshapes the paged result into rows + top-level meta", async () => {
+      riskService.getRisks.mockResolvedValue({
+        rows: [{ id: VALID_RISK_ID }],
+        total: 7,
+        page: 2,
+        totalPages: 4,
+      });
+      req.query = { page: "2", limit: "2" };
+
       await riskController.getRisks(req, res, next);
-      expect(success).toHaveBeenCalled();
+
+      // data is the array; pagination is the meta sibling.
+      expect(success).toHaveBeenCalledWith(
+        res,
+        [{ id: VALID_RISK_ID }],
+        { total: 7, page: 2, limit: 2, totalPages: 4 },
+        "Risks retrieved successfully",
+        200,
+      );
+    });
+
+    it("defaults limit to 10 when the query omits it", async () => {
+      riskService.getRisks.mockResolvedValue({
+        rows: [],
+        total: 0,
+        page: 1,
+        totalPages: 0,
+      });
+      req.query = {};
+
+      await riskController.getRisks(req, res, next);
+
+      expect(success).toHaveBeenCalledWith(
+        res,
+        [],
+        { total: 0, page: 1, limit: 10, totalPages: 0 },
+        "Risks retrieved successfully",
+        200,
+      );
     });
   });
 

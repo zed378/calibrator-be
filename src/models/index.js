@@ -261,6 +261,9 @@ module.exports = Object.assign(db, {
   KanbanCardLabel: models.KanbanCardLabel,
   KanbanSprint: models.KanbanSprint,
   KanbanCardRelation: models.KanbanCardRelation,
+  Ticket: models.Ticket,
+  TicketComment: models.TicketComment,
+  TicketCounter: models.TicketCounter,
 
   // Plural (backward compatibility)
   Tenants: models.Tenant,

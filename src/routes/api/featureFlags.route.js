@@ -112,6 +112,13 @@ router.get("/:tenantId/:flagKey", featureFlagController.isFlagEnabled);
  *       401:
  *         description: Unauthorized
  */
+// Registered BEFORE the `/:tenantId/:flagKey` param route below — otherwise
+// "initialize" is captured as a :flagKey and POST .../initialize is unreachable.
+router.post(
+  "/:tenantId/initialize",
+  superAdminOnly,
+  featureFlagController.initializeTenantFlags,
+);
 router.post("/:tenantId/:flagKey", superAdminOnly, featureFlagController.setTenantFlag);
 /**
  * @swagger
@@ -165,6 +172,5 @@ router.delete("/:tenantId/:flagKey", superAdminOnly, featureFlagController.reset
  *       401:
  *         description: Unauthorized
  */
-router.post("/:tenantId/initialize", superAdminOnly, featureFlagController.initializeTenantFlags);
 
 module.exports = router;

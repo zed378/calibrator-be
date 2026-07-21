@@ -139,6 +139,8 @@ exports.registerUser = async (input, origin) => {
     }
     throw error;
   } finally {
+    /* istanbul ignore else -- a falsy lockId throws above (before the try), so
+       this finally block is only ever reached with a truthy lockId. */
     if (lockId) {
       await releaseLock(lockKey, lockId).catch(() => {});
     }

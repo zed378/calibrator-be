@@ -202,6 +202,64 @@ describe("userPermission.service", () => {
       expect(result.data.effective[0].source).toBe("custom");
     });
 
+    it("should revoke access for a 'none' override and null out a missing menu relation", async () => {
+      const { User } = require("../../models");
+      const { MenuGroup } = require("../../models");
+      const { RoleMenuPermission, UserMenuPermission } = require("../../models");
+
+      User.findByPk.mockResolvedValue({
+        id: "user-1",
+        username: "testuser",
+        firstName: "Test",
+        lastName: "User",
+        email: "test@example.com",
+        tenantId: "tenant-1",
+        role: {
+          id: "role-1",
+          name: "admin",
+          nameToShow: "Administrator",
+          status: "active",
+        },
+      });
+
+      MenuGroup.findAll.mockResolvedValue([
+        {
+          id: "menu-1",
+          name: "dashboard",
+          slug: "dashboard",
+          icon: "home",
+          sortOrder: 1,
+        },
+      ]);
+
+      RoleMenuPermission.findAll.mockResolvedValue([
+        {
+          menuGroupId: "menu-1",
+          permissionType: "write",
+          menu: { id: "menu-1", name: "dashboard", slug: "dashboard", icon: "home", parentId: null },
+        },
+      ]);
+      // override revokes access, and its menu relation failed to load
+      UserMenuPermission.findAll.mockResolvedValue([
+        {
+          menuGroupId: "menu-1",
+          permissionType: "none",
+          menu: null,
+          notes: "revoked",
+        },
+      ]);
+
+      const result = await getUserPermissions("user-1");
+
+      // "none" collapses to no access, but still sourced from the custom override
+      expect(result.data.effective[0].permissionType).toBeNull();
+      expect(result.data.effective[0].source).toBe("custom");
+      expect(result.data.effective[0].rolePermission).toBe("write");
+      expect(result.data.effective[0].override).toBe("none");
+      // formatMenu(null) yields null rather than throwing
+      expect(result.data.overrides[0].menu).toBeNull();
+    });
+
     it("should handle user without role", async () => {
       const { User } = require("../../models");
       const { MenuGroup } = require("../../models");

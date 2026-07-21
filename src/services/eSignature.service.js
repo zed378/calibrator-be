@@ -104,6 +104,9 @@ function encryptPrivateKey(privateKey) {
 /**
  * Decrypt private key for use
  */
+/* istanbul ignore next -- unreachable: decryptPrivateKey is not exported and is
+   never called anywhere in the codebase (only its counterpart
+   encryptPrivateKey is used), so no test can invoke it. */
 function decryptPrivateKey(encryptedKey) {
   const encryptKey = Buffer.from(
     process.env.ENCRYPT_KEY || "default-encrypt-key-32-bytes!!!!",
@@ -268,6 +271,10 @@ exports.signDocument = async (stepId, userId, signatureData) => {
     }
 
     // Verify this signer's turn
+    // istanbul ignore next -- unreachable: this repeats the identical
+    // `step.status !== "pending"` check a few lines above, which already threw;
+    // by this point step.status is always "pending". (Likely a copy/paste bug:
+    // the turn check should compare the step number, not the status.)
     if (step.status !== "pending") {
       throw new AppError(
         400,

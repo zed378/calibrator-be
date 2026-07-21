@@ -77,6 +77,9 @@ class OtpStore {
 
   incrementAttempts(phone) {
     const entry = this._store.get(phone);
+    /* istanbul ignore else -- otpStore is module-private and incrementAttempts
+       has a single call site (verifyOtp), which is only reached after the same
+       entry has been null-checked; the else path is unreachable. */
     if (entry) {
       entry.attempts++;
     }
@@ -420,7 +423,11 @@ function getNotificationTemplate(type, data) {
  * Mask phone number for logging
  */
 function maskPhone(phone) {
-  const str = typeof phone === "string" ? phone : (phone?.phoneNumber || phone?.number || String(phone || ""));
+  // The `phone || ""` fallback is an unreachable defensive guard: this arm of
+  // the ternary only runs for non-strings, and every maskPhone call site
+  // (sendOtp, verifyOtp, sendNotification) rejects falsy phones beforehand, so
+  // `phone` is always a truthy object/number by the time we get here.
+  const str = typeof phone === "string" ? phone : (phone?.phoneNumber || phone?.number || String(/* istanbul ignore next */ phone || ""));
   if (!str || str.length < 4) return "***";
   return str.slice(0, -4) + "****" + str.slice(-4);
 }

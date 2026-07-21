@@ -239,4 +239,60 @@ describe("kmsService", () => {
       expect(crypto.createDecipheriv).toHaveBeenCalled();
     });
   });
+
+  describe("master key validation at module load", () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalMasterKey = process.env.KMS_MASTER_KEY;
+
+    const loadFresh = () => {
+      let mod;
+      jest.isolateModules(() => {
+        mod = require("../../services/kms.service");
+      });
+      return mod;
+    };
+
+    afterEach(() => {
+      process.env.NODE_ENV = originalNodeEnv;
+      if (originalMasterKey === undefined) {
+        delete process.env.KMS_MASTER_KEY;
+      } else {
+        process.env.KMS_MASTER_KEY = originalMasterKey;
+      }
+    });
+
+    it("refuses to boot in production without KMS_MASTER_KEY", () => {
+      process.env.NODE_ENV = "production";
+      delete process.env.KMS_MASTER_KEY;
+
+      expect(() => loadFresh()).toThrow(
+        /KMS_MASTER_KEY must be set in production/,
+      );
+    });
+
+    it("boots in production when a valid 32-byte KMS_MASTER_KEY is supplied", () => {
+      process.env.NODE_ENV = "production";
+      process.env.KMS_MASTER_KEY = "ab".repeat(32); // 64 hex chars => 32 bytes
+
+      const mod = loadFresh();
+      expect(typeof mod.encryptData).toBe("function");
+    });
+
+    it("rejects a KMS_MASTER_KEY that does not decode to 32 bytes", () => {
+      process.env.NODE_ENV = "test";
+      process.env.KMS_MASTER_KEY = "abcd"; // 2 bytes
+
+      expect(() => loadFresh()).toThrow(
+        /KMS_MASTER_KEY must decode to 32 bytes \(got 2\)/,
+      );
+    });
+
+    it("falls back to the derived development key outside production", () => {
+      process.env.NODE_ENV = "development";
+      delete process.env.KMS_MASTER_KEY;
+
+      const mod = loadFresh();
+      expect(typeof mod.encryptData).toBe("function");
+    });
+  });
 });

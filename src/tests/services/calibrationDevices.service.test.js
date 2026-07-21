@@ -463,6 +463,28 @@ describe("calibrationDevices.service", () => {
       ]);
     });
 
+    it("ignores a whitespace-only trailing fragment after the final newline", async () => {
+      validator.createCalibrationDeviceSchema.validate.mockImplementation((data) => ({
+        error: null,
+        value: data,
+      }));
+      CalibrationDevice.findAll.mockResolvedValueOnce([]);
+      CalibrationDevice.bulkCreate.mockResolvedValueOnce([]);
+
+      // trailing "   " leaves a non-empty currentField that trims to "" with an
+      // empty currentLine — it must not become a third, blank device row.
+      fs.writeFileSync(testCsvPath, "Device Name\nDevice A\nDevice B\n   ");
+
+      const result = await bulkImportCalibrationDevices("tenant-1", testCsvPath);
+
+      expect(result.data.successCount).toBe(2);
+      expect(result.data.failedCount).toBe(0);
+      expect(CalibrationDevice.bulkCreate).toHaveBeenCalledWith([
+        expect.objectContaining({ name: "Device A" }),
+        expect.objectContaining({ name: "Device B" }),
+      ]);
+    });
+
     it("skips blank lines in the middle of the file", async () => {
       validator.createCalibrationDeviceSchema.validate.mockImplementation((data) => ({
         error: null,

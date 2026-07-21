@@ -162,7 +162,11 @@ exports.dynamicAccess = (menuGroup, permissionType, options = {}) => {
       if (!finalAllowed) {
         const deniedTypes = results
           .filter((r) => !r.allowed)
-          .flatMap((r) => r.deniedTypes || []);
+          // `|| []` is an unreachable defensive guard: results come only from
+          // checkApiKeyScope / checkMenuPermission, each of which has a single
+          // return that always sets deniedTypes to an array (possibly empty,
+          // which is still truthy).
+          .flatMap((r) => /* istanbul ignore next */ r.deniedTypes || []);
 
         return res.status(403).json({
           success: false,

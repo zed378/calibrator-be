@@ -295,6 +295,9 @@ exports.createAdjustment = async (tenantId, input, userId) => {
     }
 
     let newQuantity = stock.quantity;
+    /* istanbul ignore else -- createAdjustmentSchema restricts `type` to
+       exactly "addition" | "subtraction" | "write_off" and validate() runs
+       above, so the implicit else (quantity unchanged) is unreachable. */
     if (data.type === "addition") {
       newQuantity += data.quantity;
     } else if (data.type === "subtraction" || data.type === "write_off") {

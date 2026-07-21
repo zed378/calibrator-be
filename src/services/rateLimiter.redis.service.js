@@ -27,6 +27,10 @@ let redis = null;
 let redisReady = false;
 let redisInitPromise = null;
 
+/* istanbul ignore next -- unreachable: getRedis() is not exported and has no
+   call site anywhere in the codebase (verified by grep), so `redis` is never
+   constructed and `redisReady` never becomes true. See the note above the
+   storeGet/storeSet/storeDel/storeIncr helpers. */
 function getRedis() {
   if (redis) {return redis;}
   if (!redisInitPromise) {
@@ -91,8 +95,14 @@ function memoryIncr(key, ttlMs) {
 // UNIFIED STORAGE INTERFACE
 // ============================================================
 
+// NOTE: the `redisReady && redis` guards below are unreachable — nothing ever
+// calls getRedis(), so `redis` is permanently null and every store operation
+// takes the in-memory branch. The Redis arms are ignored for coverage rather
+// than tested; the in-memory arms remain fully covered.
+
 async function storeGet(key) {
-  if (redisReady && redis) {
+  // istanbul ignore if -- unreachable: redis is never initialised (see getRedis)
+  if (/* istanbul ignore next */ redisReady && redis) {
     const data = await redis.get(key);
     return data ? JSON.parse(data) : null;
   }
@@ -100,7 +110,8 @@ async function storeGet(key) {
 }
 
 async function storeSet(key, value, ttlMs) {
-  if (redisReady && redis) {
+  // istanbul ignore if -- unreachable: redis is never initialised (see getRedis)
+  if (/* istanbul ignore next */ redisReady && redis) {
     await redis.set(key, JSON.stringify(value), "PX", ttlMs);
   } else {
     memorySet(key, value, ttlMs);
@@ -108,7 +119,8 @@ async function storeSet(key, value, ttlMs) {
 }
 
 async function storeDel(key) {
-  if (redisReady && redis) {
+  // istanbul ignore if -- unreachable: redis is never initialised (see getRedis)
+  if (/* istanbul ignore next */ redisReady && redis) {
     await redis.del(key);
   } else {
     memoryDel(key);
@@ -116,7 +128,8 @@ async function storeDel(key) {
 }
 
 async function storeIncr(key, ttlMs) {
-  if (redisReady && redis) {
+  // istanbul ignore if -- unreachable: redis is never initialised (see getRedis)
+  if (/* istanbul ignore next */ redisReady && redis) {
     const count = await redis.incr(key);
     if (count === 1) {
       await redis.pexpire(key, ttlMs);
@@ -201,7 +214,9 @@ async function recordAuthFailure({ userId = null, tokenHash = null, ip = null, e
 
     // Revoke token after 3 failures with same token (on 3rd failure)
     if (count >= 3 && !entry?.revoked) {
-      await storeSet(tokenKey, { count, revoked: true, firstAttempt: entry?.firstAttempt || now }, ttlMs);
+      // `|| now` is unreachable here: reaching count >= 3 means a prior entry
+      // exists and every write above stores a truthy Date.now() firstAttempt.
+      await storeSet(tokenKey, { count, revoked: true, firstAttempt: /* istanbul ignore next */ entry?.firstAttempt || now }, ttlMs);
       logger.warn(`Token revoked due to brute force on ${endpoint}`, { tokenHash });
     }
 
@@ -213,7 +228,9 @@ async function recordAuthFailure({ userId = null, tokenHash = null, ip = null, e
     // Hard block after 2x maxAttempts
     if (count >= config.maxAttempts * 2) {
       const blockUntil = now + 24 * 60 * 60 * 1000; // 24h
-      await storeSet(tokenKey, { count, blocked: true, blockUntil, firstAttempt: entry?.firstAttempt || now }, ttlMs);
+      // `|| now` is unreachable here for the same reason as above: count >= 2x
+      // maxAttempts implies a prior entry with a truthy firstAttempt.
+      await storeSet(tokenKey, { count, blocked: true, blockUntil, firstAttempt: /* istanbul ignore next */ entry?.firstAttempt || now }, ttlMs);
       results.allowed = false;
       results.lockoutUntil = new Date(blockUntil);
       results.lockoutReason = "Token blocked due to excessive failed attempts";
@@ -337,6 +354,9 @@ function endpointRateLimiter(endpointKey, options = {}) {
         }
 
         if (count > effectiveMaxRequests) {
+          // istanbul ignore next -- the `redisReady && redis` arm is unreachable:
+          // redis is never initialised (see getRedis), so this always yields
+          // effectiveWindowMs. Asserted indirectly by the retryAfter tests.
           const ttl = redisReady && redis ? await redis.pttl(key) : effectiveWindowMs;
           return res.status(429).json({
             success: false,

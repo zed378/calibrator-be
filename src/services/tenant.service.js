@@ -57,6 +57,9 @@ const transformTenant = (tenant) => {
  * @param {Array} rows - Array of Sequelize tenant instances
  * @returns {Array} - Transformed tenant data
  */
+/* istanbul ignore next -- unreachable: transformTenants is never referenced by
+   any call site in this module or elsewhere in the codebase (dead helper kept
+   alongside transformTenant); it cannot be invoked from a test. */
 const transformTenants = (rows) => {
   return (rows || []).map(transformTenant);
 };
@@ -116,12 +119,16 @@ exports.fetchTenants = async ({ find, page = 1, limit = DEFAULT_LIMIT }) => {
         ["tenant_id", "id"],
         [db.sequelize.fn("COUNT", "*"), "count"],
       ],
-      where: whereClause
+      // unreachable else-branch: `whereClause` is initialised to an object
+      // literal a few lines above and is only ever mutated, so it is always
+      // truthy and the alternate can never execute.
+      where: /* istanbul ignore next */ whereClause
         ? {
           [Op.or]: [{ tenant_id: tenantRows.map((t) => t.id) }],
         }
         : {
-          tenant_id: tenantRows.map((t) => t.id),
+          // unreachable: lives in the dead else-branch above.
+          tenant_id: tenantRows.map(/* istanbul ignore next */ (t) => t.id),
         },
       group: ["tenant_id"],
       raw: true,

@@ -262,5 +262,29 @@ describe("ai.service", () => {
 
       expect(result).toBeNull();
     });
+
+    it("should return null when the RAG completion call fails", async () => {
+      const settings = [
+        { key: "ai_api_key", value: "sk-key" },
+        { key: "ai_base_url", value: "https://api.openai.com/v1" },
+        { key: "ai_vendor", value: "openai" },
+      ];
+      TenantSettings.findAll
+        .mockResolvedValueOnce(settings)
+        .mockResolvedValueOnce(settings);
+      // embedding succeeds, the chat completion then fails
+      axios.post
+        .mockResolvedValueOnce({ data: { data: [{ embedding: [0.1, 0.2] }] } })
+        .mockRejectedValueOnce(new Error("llm exploded"));
+
+      const { logger } = require("../../middlewares/activityLog.middleware");
+      const result = await aiService.queryDocuments("tenant-1", "question");
+
+      expect(result).toBeNull();
+      expect(axios.post).toHaveBeenCalledTimes(2);
+      expect(logger.error).toHaveBeenCalledWith("RAG completion failed", {
+        error: "llm exploded",
+      });
+    });
   });
 });

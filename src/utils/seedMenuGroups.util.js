@@ -57,6 +57,8 @@ function getMenuGroupId(slug) {
     "gdpr": "a0000000-0000-0000-0000-000000000228",
     "custom-domains": "a0000000-0000-0000-0000-000000000229",
     "kanban": "a0000000-0000-0000-0000-000000000230",
+    "tickets-raise": "a0000000-0000-0000-0000-000000000231",
+    "tickets-response": "a0000000-0000-0000-0000-000000000232",
     "predictive-maintenance": "a0000000-0000-0000-0000-000000000306",
     // Management sub-group categories (level 2 of the 3-level sidebar)
     "mgmt-organization": "a0000000-0000-0000-0000-000000000250",
@@ -283,6 +285,22 @@ async function seedMenuGroups() {
       slug: "batch-jobs",
       icon: "Cpu",
       sortOrder: 2,
+      is_active: true,
+      parentSlug: "mgmt-work",
+    },
+    {
+      name: "Raise a Ticket",
+      slug: "tickets-raise",
+      icon: "TicketPlus",
+      sortOrder: 3,
+      is_active: true,
+      parentSlug: "mgmt-work",
+    },
+    {
+      name: "Ticket Response",
+      slug: "tickets-response",
+      icon: "TicketCheck",
+      sortOrder: 4,
       is_active: true,
       parentSlug: "mgmt-work",
     },
@@ -561,8 +579,15 @@ async function seedMenuGroups() {
   const deprecated = await MenuGroup.findAll({
     where: {
       [Op.or]: [
-        { slug: { [Op.in]: ["table-permission", "table-permissions"] } },
-        { name: { [Op.in]: ["Table Permission", "Table Permissions"] } },
+        // Legacy "table permission" menu (removed per product decision) and the
+        // old single "Support Tickets" menu, now split into tickets-raise /
+        // tickets-response. Their role permissions are cleaned up below too.
+        { slug: { [Op.in]: ["table-permission", "table-permissions", "tickets"] } },
+        {
+          name: {
+            [Op.in]: ["Table Permission", "Table Permissions", "Support Tickets"],
+          },
+        },
       ],
     },
   });
@@ -707,6 +732,7 @@ async function seedRoleMenuPermissions() {
         "gdpr",
         "custom-domains",
         "kanban",
+        "tickets-response",
       ],
     },
     {
@@ -750,6 +776,8 @@ async function seedRoleMenuPermissions() {
         "gdpr",
         "custom-domains",
         "kanban",
+        "tickets-raise",
+        "tickets-response",
       ],
     },
     {

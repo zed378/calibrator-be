@@ -40,6 +40,28 @@ describe("notificationChannels.service", () => {
       expect(result).toEqual({});
     });
 
+    it("should default the options object entirely when it is omitted", async () => {
+      const result = await notificationChannels.dispatch({
+        title: "Test",
+        message: "Test message",
+      });
+
+      expect(result).toEqual({});
+      expect(queueNotificationEmail).not.toHaveBeenCalled();
+      expect(sms.sendSms).not.toHaveBeenCalled();
+    });
+
+    it("should report 'skipped(n/a)' when SMS is skipped without a reason", async () => {
+      sms.sendSms.mockResolvedValueOnce({ sent: false });
+
+      const result = await notificationChannels.dispatch(
+        { title: "Test", message: "Test message" },
+        { channels: ["sms"], recipientPhone: "+15551234567" },
+      );
+
+      expect(result.sms).toBe("skipped(n/a)");
+    });
+
     it("should dispatch to email when email channel is specified", async () => {
       const notification = {
         title: "Test Notification",

@@ -646,8 +646,10 @@ async function seedUsers() {
         status: userData.status,
         roleId: userData.roleId,
         tenantId: userData.tenantId,
+        // DEFAULT_SYSTEM_USERS is a module constant whose only entry sets
+        // isEmailVerified explicitly, so the `: true` fallback is unreachable.
         isEmailVerified:
-          userData.isEmailVerified !== undefined
+          /* istanbul ignore next */ userData.isEmailVerified !== undefined
             ? userData.isEmailVerified
             : true,
       };

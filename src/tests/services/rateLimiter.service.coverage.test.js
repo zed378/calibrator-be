@@ -1303,4 +1303,189 @@ beforeEach(() => {
       );
     });
   });
+
+  describe("optional-parameter defaults", () => {
+    it("getRateLimitStatus should default type to 'api' when omitted", async () => {
+      // Drive the api counter for a user via the middleware...
+      const middleware = rl.endpointRateLimiter("tenantCreate", {
+        maxRequests: 10,
+        windowMs: 60000,
+        byToken: false,
+        byIp: false,
+      });
+      await middleware(
+        { headers: {}, user: { id: "default-type-user" } },
+        { status: jest.fn().mockReturnThis(), json: jest.fn(), set: jest.fn() },
+        jest.fn(),
+      );
+
+      // ...then read it back without passing `type` at all.
+      const status = await rl.getRateLimitStatus({
+        userId: "default-type-user",
+        endpoint: "tenantCreate",
+      });
+      expect(status.user.count).toBe(1);
+      // type defaults to "api", so the auth-only isLocked flag must be false
+      expect(status.user.isLocked).toBe(false);
+      expect(status.token).toBeNull();
+      expect(status.ip).toBeNull();
+    });
+
+    it("isTokenBlocked should default the endpoint to null when omitted", async () => {
+      // Block the token under the null endpoint (10 = 2x login maxAttempts)
+      for (let i = 0; i < 10; i++) {
+        await rl.recordAuthFailure({
+          tokenHash: "hash:no-endpoint",
+          endpoint: null,
+        });
+      }
+
+      const blocked = await rl.isTokenBlocked("no-endpoint");
+      expect(blocked.isBlocked).toBe(true);
+      expect(blocked.reason).toBe("Token blocked due to suspicious activity");
+      expect(blocked.blockUntil).toBeInstanceOf(Date);
+    });
+
+    it("isUserLockedOut should default the endpoint to null when omitted", async () => {
+      const status = await rl.isUserLockedOut("unknown-null-endpoint");
+      expect(status.isLocked).toBe(false);
+      // default auth config maxAttempts (5) with no recorded failures
+      expect(status.remainingAttempts).toBe(5);
+    });
+  });
+
+  describe("getRateLimitStatus - entries without a usable expiry", () => {
+    it("should report expiresAt as null when the stored entry has no valid expiry", async () => {
+      // A limiter configured with a non-numeric window writes entries whose
+      // expiresAt computes to NaN, i.e. the entry carries no usable expiry.
+      const middleware = rl.endpointRateLimiter("tenantCreate", {
+        maxRequests: 10,
+        windowMs: NaN,
+      });
+      await middleware(
+        {
+          ip: "8.8.4.4",
+          headers: { authorization: "Bearer nanwin" },
+          user: { id: "nan-window-user" },
+        },
+        { status: jest.fn().mockReturnThis(), json: jest.fn(), set: jest.fn() },
+        jest.fn(),
+      );
+
+      const status = await rl.getRateLimitStatus({
+        userId: "nan-window-user",
+        tokenHash: "hash:nanwin",
+        ip: "8.8.4.4",
+        endpoint: "tenantCreate",
+        type: "api",
+      });
+
+      // All three trackers recorded the request but expose no expiry date.
+      expect(status.user).toEqual({
+        count: 1,
+        expiresAt: null,
+        isLocked: false,
+      });
+      expect(status.token).toEqual({
+        count: 1,
+        expiresAt: null,
+        isBlocked: false,
+      });
+      expect(status.ip).toEqual({ count: 1, expiresAt: null });
+    });
+  });
+
+  describe("endpointRateLimiter - byIp disabled", () => {
+    it("should not create an IP key when byIp is false", async () => {
+      const middleware = rl.endpointRateLimiter("tenantCreate", {
+        maxRequests: 10,
+        windowMs: 60000,
+        byToken: false,
+        byIp: false,
+      });
+      const next = jest.fn();
+      await middleware(
+        { ip: "9.9.9.9", headers: {}, user: { id: "no-ip-user" } },
+        { status: jest.fn().mockReturnThis(), json: jest.fn(), set: jest.fn() },
+        next,
+      );
+      expect(next).toHaveBeenCalled();
+
+      const status = await rl.getRateLimitStatus({
+        userId: "no-ip-user",
+        ip: "9.9.9.9",
+        endpoint: "tenantCreate",
+        type: "api",
+      });
+      expect(status.user.count).toBe(1);
+      expect(status.ip).toBeNull();
+    });
+
+    it("should call next without touching the store when every key source is disabled", async () => {
+      const middleware = rl.endpointRateLimiter("tenantCreate", {
+        maxRequests: 10,
+        windowMs: 60000,
+        byUser: false,
+        byToken: false,
+        byIp: false,
+      });
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn(),
+        set: jest.fn(),
+      };
+      const next = jest.fn();
+      await middleware(
+        { ip: "9.9.9.10", headers: {}, user: { id: "none-user" } },
+        res,
+        next,
+      );
+
+      expect(next).toHaveBeenCalled();
+      expect(res.set).not.toHaveBeenCalled();
+      expect(res.status).not.toHaveBeenCalled();
+      const status = await rl.getRateLimitStatus({
+        userId: "none-user",
+        ip: "9.9.9.10",
+        endpoint: "tenantCreate",
+        type: "api",
+      });
+      expect(status.user).toBeNull();
+      expect(status.ip).toBeNull();
+    });
+  });
+
+  describe("authPreCheck - client IP resolution", () => {
+    const makeRes = () => ({
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn(),
+    });
+
+    it("should fall back to x-forwarded-for when req.ip is absent", async () => {
+      const middleware = rl.authPreCheck("login");
+      const req = { headers: { "x-forwarded-for": "6.6.6.6" }, socket: {} };
+      const next = jest.fn();
+
+      await middleware(req, makeRes(), next);
+
+      expect(next).toHaveBeenCalled();
+      expect(req.rateLimitContext).toEqual({
+        userId: null,
+        tokenHash: null,
+        ip: "6.6.6.6",
+        endpoint: "login",
+      });
+    });
+
+    it("should fall back to socket.remoteAddress when req.ip and the header are absent", async () => {
+      const middleware = rl.authPreCheck("login");
+      const req = { headers: {}, socket: { remoteAddress: "4.4.4.4" } };
+      const next = jest.fn();
+
+      await middleware(req, makeRes(), next);
+
+      expect(next).toHaveBeenCalled();
+      expect(req.rateLimitContext.ip).toBe("4.4.4.4");
+    });
+  });
 });

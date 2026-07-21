@@ -51,7 +51,9 @@ exports.resetTenantFlag = asyncHandler(async (req, res) => {
 });
 
 exports.initializeTenantFlags = asyncHandler(async (req, res) => {
-  const validated = validate(req.params, flagKeySchema);
+  // Only tenantId is in the path here — validating against flagKeySchema (which
+  // also requires flagKey) rejected every call with 400.
+  const validated = validate(req.params, tenantFlagQuerySchema);
   const result = await featureFlagService.initializeTenantFlags(validated.tenantId);
 
   success(res, result, null, "Feature flags initialized");

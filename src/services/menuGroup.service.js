@@ -29,6 +29,10 @@ const mapSlugToPath = (slug) => {
     permissions: "/dashboard/permissions",
     sessions: "/dashboard/session-management",
     warehouse: "/dashboard/warehouses",
+    // Support desk pages are nested under /dashboard/tickets alongside the
+    // shared ticket detail route (/dashboard/tickets/[ticketId]).
+    "tickets-raise": "/dashboard/tickets/raise",
+    "tickets-response": "/dashboard/tickets/response",
   };
 
   if (customPaths[slug]) {

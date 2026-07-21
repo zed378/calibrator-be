@@ -89,7 +89,10 @@ const transformPost = (post) => (post && post.toJSON ? post.toJSON() : post || n
 const findPostWithCategories = (id, publicOnly = false) =>
   Post.findByPk(id, {
     include: [{ ...CATEGORY_INCLUDE, required: false }],
-    ...(publicOnly ? { attributes: { exclude: [] } } : {}),
+    // All three call sites invoke findPostWithCategories(id) without the second
+    // argument, so publicOnly is always the false default and the truthy arm
+    // (itself a no-op `exclude: []`) is unreachable.
+    ...(/* istanbul ignore next */ publicOnly ? { attributes: { exclude: [] } } : {}),
   });
 
 const paginate = (page, limit) => {

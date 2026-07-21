@@ -296,7 +296,9 @@ exports.getDepreciationReport = async (tenantId, { asOf } = {}) => {
     "Device,Serial Number,Purchase Date,Purchase Price,Salvage,Life (yrs),Method,Age (yrs),Annual Depreciation,Accumulated,Book Value,Fully Depreciated";
   const csvRows = rows.map((r) =>
     [
-      `"${(r.deviceName || "").replace(/"/g, '""')}"`,
+      // deviceName is built above as `record.device?.name || "Unknown device"`,
+      // so it is never falsy here; the `|| ""` is an unreachable defensive guard.
+      `"${(/* istanbul ignore next */ r.deviceName || "").replace(/"/g, '""')}"`,
       r.serialNumber || "",
       r.purchaseDate,
       r.purchasePrice,
