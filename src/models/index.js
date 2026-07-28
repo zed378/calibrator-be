@@ -4,7 +4,7 @@
  * Architecture:
  * - All models reside in src/models/ as individual files
  * - Each model exports a function that accepts the Sequelize instance and DataTypes
- * - Dynamic directory loading via fs.readdirSync discovers and initializes models
+ * - Static require() manifest initializes models (single-file-binary safe)
  * - Association methods on each model are called after all models are loaded
  * - Single aggregated db object is exported for dependency injection
  *
@@ -46,8 +46,6 @@
  * - SupplierScorecard: Supplier performance tracking records
  */
 
-const fs = require("fs");
-const path = require("path");
 const { Sequelize, DataTypes, Op } = require("sequelize");
 
 // Use the shared Sequelize instance from config.
@@ -58,15 +56,85 @@ const { db } = require("../config");
 
 const models = {};
 
-// Dynamic Loading: Read directory, execute exports, store in models object
-const modelFiles = fs
-  .readdirSync(__dirname)
-  .filter((file) => {
-    return (
-      file.indexOf(".") !== 0 && file !== "index.js" && file.slice(-3) === ".js"
-    );
-  })
-  .map((file) => require(path.join(__dirname, file)));
+// Static Loading: one explicit require() per model file. Dynamic discovery
+// (fs.readdirSync(__dirname) + require(path.join(...))) returns nothing / fails
+// to resolve inside a single-file binary's virtual filesystem (@yao-pkg/pkg,
+// bun --compile), so the whole set is listed statically to stay visible to the
+// bundler's static analysis. Load order is irrelevant — associations run after
+// every model is registered (see the associate loop below).
+const modelFiles = [
+  require("./apiKey.model"),
+  require("./assetFinance.model"),
+  require("./attachment.model"),
+  require("./auditLog.model"),
+  require("./batchJob.model"),
+  require("./calibrationDevice.model"),
+  require("./calibrationRecord.model"),
+  require("./capa.model"),
+  require("./category.model"),
+  require("./certificate.model"),
+  require("./consentRecord.model"),
+  require("./customDomain.model"),
+  require("./dataRetentionPolicy.model"),
+  require("./documentChunk.model"),
+  require("./dsarRequest.model"),
+  require("./eSignatureRecord.model"),
+  require("./invoice.model"),
+  require("./iotReading.model"),
+  require("./kanbanCard.model"),
+  require("./kanbanCardAssignee.model"),
+  require("./kanbanCardLabel.model"),
+  require("./kanbanCardRelation.model"),
+  require("./kanbanColumn.model"),
+  require("./kanbanLabel.model"),
+  require("./kanbanProject.model"),
+  require("./kanbanProjectMember.model"),
+  require("./kanbanSprint.model"),
+  require("./maintenanceWorkOrder.model"),
+  require("./menuGroup.model"),
+  require("./nonConformance.model"),
+  require("./notification.model"),
+  require("./notificationState.model"),
+  require("./planQuota.model"),
+  require("./post.model"),
+  require("./postCategory.model"),
+  require("./risk.model"),
+  require("./role.model"),
+  require("./roleMenuPermission.model"),
+  require("./session.model"),
+  require("./signatureRecord.model"),
+  require("./signatureWorkflow.model"),
+  require("./signatureWorkflowStep.model"),
+  require("./sopDocument.model"),
+  require("./sopTrainingAcknowledgment.model"),
+  require("./stock.model"),
+  require("./stockAdjustment.model"),
+  require("./stockOpname.model"),
+  require("./stockTransfer.model"),
+  require("./storageLocation.model"),
+  require("./subscription.model"),
+  require("./supplierScorecard.model"),
+  require("./tenant.model"),
+  require("./tenantBackup.model"),
+  require("./tenantHierarchy.model"),
+  require("./tenantKey.model"),
+  require("./tenantSettings.model"),
+  require("./ticket.model"),
+  require("./ticketComment.model"),
+  require("./ticketCounter.model"),
+  require("./usageAlert.model"),
+  require("./usageMetric.model"),
+  require("./user.model"),
+  require("./userMenuPermission.model"),
+  require("./vendor.model"),
+  require("./warehouse.model"),
+  require("./webhook.model"),
+  require("./webhookDelivery.model"),
+  require("./workflow.model"),
+  require("./workflowAction.model"),
+  require("./workflowInstance.model"),
+  require("./workflowStep.model"),
+];
 
 modelFiles.forEach((defineModel) => {
   const model = defineModel(db, DataTypes);

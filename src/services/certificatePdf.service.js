@@ -18,9 +18,12 @@ const {
   User,
 } = require("../models");
 const storagePath = require("../utils/storagePath.util");
+const appPath = require("../utils/appPath.util");
 const { logger } = require("../middlewares/activityLog.middleware");
 
-const TEMPLATE_PATH = path.join(__dirname, "..", "templates", "certificate.html");
+// appPath (execPath-relative when packaged) so the template is read from the
+// files shipped next to the binary, not the unreadable __dirname-embedded copy.
+const TEMPLATE_PATH = appPath("src", "templates", "certificate.html");
 const SIGNING_SECRET = process.env.CERT_SIGNING_SECRET;
 /* istanbul ignore next -- fail-fast startup guard: certificate signatures are
    the platform's trust anchor, so we never fall back to a hardcoded default. */

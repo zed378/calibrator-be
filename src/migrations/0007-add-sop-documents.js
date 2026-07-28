@@ -4,7 +4,14 @@ module.exports = {
   up: async ({ context }) => {
     const { sequelize } = context;
     const DataTypes = sequelize.Sequelize.DataTypes;
-    
+
+    // Idempotent: db.sync() creates these tables from the models on a fresh DB,
+    // so only create the ones actually missing.
+    const existing = (await context.showAllTables()).map((t) =>
+      (typeof t === "object" ? t.tableName : t).toLowerCase(),
+    );
+
+    if (!existing.includes("sop_documents")) {
     // Create sop_documents table
     await context.createTable("sop_documents", {
       id: {
@@ -67,7 +74,9 @@ module.exports = {
         allowNull: true,
       },
     });
+    }
 
+    if (!existing.includes("sop_training_acknowledgments")) {
     // Create sop_training_acknowledgments table
     await context.createTable("sop_training_acknowledgments", {
       id: {
@@ -110,6 +119,7 @@ module.exports = {
         allowNull: false,
       },
     });
+    }
   },
 
   down: async ({ context }) => {

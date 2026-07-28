@@ -3,20 +3,23 @@ const mustache = require("mustache");
 
 const fs = require("fs");
 
-const path = require("path");
+const appPath = require("../utils/appPath.util");
 
 // ==========================================
 // EMAIL TEMPLATES
 // ==========================================
 
+// Resolve via appPath (execPath-relative when packaged) so the templates are
+// read from files shipped alongside the binary — a compiled single-file binary
+// cannot fs.read its own __dirname-embedded assets under bun.
 const activationTemplate = fs.readFileSync(
-  path.join(__dirname, "../templates/template.html"),
+  appPath("src", "templates", "template.html"),
 
   "utf8",
 );
 
 const otpTemplate = fs.readFileSync(
-  path.join(__dirname, "../templates/otp.html"),
+  appPath("src", "templates", "otp.html"),
 
   "utf8",
 );

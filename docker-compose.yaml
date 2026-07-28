@@ -1,35 +1,44 @@
 services:
-  # backend:
-  #   build: .
-  #   container_name: backend
-  #   restart: unless-stopped
-  #   env_file:
-  #     - .env
-  #   ports:
-  #     - "${BACKEND_PORT:-3000}:3000"
-  #   volumes:
-  #     - ./uploads:/app/uploads
-  #     - ./backup:/app/backup
-  #     - ./log:/app/log
-  #   depends_on:
-  #     - postgres
-  #     - redis
-  #     - rabbitmq
-  #     - clamav
-  #   healthcheck:
-  #     test:
-  #       [
-  #         "CMD",
-  #         "wget",
-  #         "--quiet",
-  #         "--tries=1",
-  #         "--spider",
-  #         "http://localhost:3000/health",
-  #       ]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-  #     start_period: 40s
+  backend:
+    build: .
+    container_name: backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${BACKEND_PORT:-3000}:3000"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./backup:/app/backup
+      - ./log:/app/log
+    # Wait for the datastores to be READY (not merely started) before booting —
+    # the backend runs db.sync() + migrations against Postgres at startup, so it
+    # must not start until Postgres is accepting connections (pg_isready). Redis
+    # and RabbitMQ are also connected to at boot. ClamAV's first-run freshclam
+    # takes minutes and virus scanning is optional, so only require it started.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      clamav:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3000/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   redis:
     image: redis:8.6-alpine
@@ -40,10 +49,11 @@ services:
     volumes:
       - ./data/redis:/data
     healthcheck:
+      # PONG only once Redis is serving; poll fast so the backend starts promptly.
       test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      interval: 5s
+      timeout: 5s
+      retries: 10
       start_period: 10s
 
   rabbitmq:
@@ -59,11 +69,15 @@ services:
     volumes:
       - ./data/rabbitmq:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 30s
+      # `ping` only proves the Erlang node is up; check_port_connectivity proves
+      # the AMQP listener (5672) is actually accepting connections — i.e. ready
+      # for the backend to connect. RabbitMQ (with the management plugin) can
+      # take a while on first boot, so allow a long start_period + many retries.
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
       timeout: 10s
-      retries: 3
-      start_period: 30s
+      retries: 15
+      start_period: 60s
 
   postgres:
     # pgvector-enabled Postgres: the AI RAG module stores document embeddings in
@@ -87,10 +101,13 @@ services:
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     healthcheck:
+      # pg_isready reports success only when the server is accepting connections.
+      # Poll every 5s so the backend starts promptly once Postgres is ready; the
+      # generous start_period + retries tolerate first-boot data-dir init.
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      interval: 5s
+      timeout: 5s
+      retries: 10
       start_period: 30s
 
   pgadmin:

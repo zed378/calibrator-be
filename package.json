@@ -38,7 +38,8 @@
     "test:coverage": "node --max-old-space-size=4096 node_modules/jest/bin/jest.js --coverage",
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "build": "bun build index.js --compile --loader:.html=text --target bun-linux-x64 --outfile dist/boilerplate",
+    "build": "npm run swagger:generate && pkg . --output dist/backend",
+    "build:bun": "npm run swagger:generate && bun build index.js --compile --loader:.html=text --outfile dist/boilerplate",
     "swagger:generate": "node src/utils/generateSwagger.util.js",
     "migrate": "node src/scripts/migrate.js up",
     "migrate:storage": "node src/scripts/migrateStorage.js",
@@ -107,6 +108,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@yao-pkg/pkg": "^6.21.0",
     "eslint": "^10.5.0",
     "eslint-config-prettier": "^10.1.8",
     "jest": "^30.4.2",

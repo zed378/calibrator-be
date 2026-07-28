@@ -3,8 +3,7 @@ const path = require("path");
 
 const storagePath = require("../utils/storagePath.util");
 const { logger } = require("./activityLog.middleware");
-
-const isPackaged = !!process.pkg;
+const { isPackaged } = require("../utils/packaged.util");
 
 // Root Directory
 const rootDir = storagePath();

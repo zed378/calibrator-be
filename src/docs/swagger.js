@@ -18,6 +18,12 @@ if (swaggerSpec.securityDefinitions) {
 }
 
 const swaggerDocs = (app) => {
+  // Always expose the raw spec — packager-agnostic (no swagger-ui-dist assets
+  // needed), so the API contract stays reachable even where the interactive UI
+  // (which serves the embedded/shipped swagger-ui-dist, pkg-first) is not
+  // available.
+  app.get("/docs.json", (req, res) => res.json(swaggerSpec));
+
   app.use(
     "/docs",
     swaggerUi.serve,

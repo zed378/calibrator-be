@@ -1,8 +1,7 @@
 const path = require("path");
 
 const dotenv = require("dotenv");
-
-const isPackaged = !!process.pkg;
+const { isPackaged } = require("./packaged.util");
 
 // Development
 if (!isPackaged) {

@@ -1,6 +1,5 @@
 const path = require("path");
-
-const isPackaged = !!process.pkg;
+const { isPackaged } = require("./packaged.util");
 
 function getAppRoot() {
   if (isPackaged) {

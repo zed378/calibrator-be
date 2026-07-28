@@ -1,6 +1,5 @@
 const path = require("path");
-
-const isPackaged = !!process.pkg;
+const { isPackaged } = require("./packaged.util");
 
 const storageRoot = isPackaged
   ? process.env.APP_STORAGE_PATH ||

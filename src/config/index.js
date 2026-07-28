@@ -1,6 +1,6 @@
 const cls = require("cls-hooked");
 const namespace = cls.createNamespace("callibrator-namespace");
-const { Sequelize } = require("sequelize");
+const { Sequelize, QueryTypes } = require("sequelize");
 Sequelize.useCLS(namespace);
 const { logger } = require("../middlewares/activityLog.middleware");
 const { waitForDbReady } = require("../utils/dbReady.util");
@@ -137,12 +137,15 @@ async function createDatabaseIfNotExists() {
     try {
       await bootstrapDb.authenticate();
 
-      const { rows } = await bootstrapDb.query(
-        "SELECT 1 FROM pg_database WHERE datname = $1;",
-        { replacements: [dbName] },
+      const results = await bootstrapDb.query(
+        "SELECT 1 FROM pg_database WHERE datname = ?;",
+        {
+          replacements: [dbName],
+          type: QueryTypes.SELECT,
+        },
       );
 
-      if (rows.length === 0) {
+      if (results.length === 0) {
         await bootstrapDb.query(`CREATE DATABASE "${dbName}";`);
         logger.info(`Database "${dbName}" created (PostgreSQL).`);
       } else {

@@ -17,6 +17,7 @@ const dns = require("dns").promises;
 const { logger } = require("../middlewares/activityLog.middleware");
 const { AppError } = require("../utils/appError.util");
 const { db } = require("../config");
+const storagePath = require("../utils/storagePath.util");
 
 // ==========================================
 // CONFIGURATION
@@ -422,7 +423,7 @@ exports.provisionTLSCertificate = async (domain, tenantId) => {
       process.env.ACME_DIRECTORY_URL || acme.directory.letsencrypt.staging;
     const challengeDir =
       process.env.ACME_CHALLENGE_DIR ||
-      path.join(process.cwd(), ".well-known", "acme-challenge");
+      storagePath(".well-known", "acme-challenge");
 
     const accountKey = await acme.crypto.createPrivateKey();
     const client = new acme.Client({ directoryUrl, accountKey });

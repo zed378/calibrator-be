@@ -59,6 +59,7 @@ const {
 const { WINDOW } = require("./src/constants/rateLimitConstants");
 
 const storagePath = require("./src/utils/storagePath.util");
+const appPath = require("./src/utils/appPath.util");
 
 const migrationService = require("./src/services/migration.service");
 
@@ -319,7 +320,10 @@ app.use(activityLogger);
 // STATIC FILES
 // ======================================================
 
-app.use("/.well-known", express.static(".well-known"));
+// ACME HTTP-01 challenge files are written at runtime, so serve them from the
+// writable storage root (must match where customDomains.service writes them),
+// not a CWD-relative path that shifts with the launch directory.
+app.use("/.well-known", express.static(storagePath(".well-known")));
 
 app.use(
   "/uploads",
@@ -333,7 +337,7 @@ app.use(
   }),
 );
 
-app.use("/public", express.static("public"));
+app.use("/public", express.static(appPath("public")));
 
 // ======================================================
 // SANITIZER
@@ -539,17 +543,12 @@ app.get("/ready", async (req, res) => {
 // DOCUMENTATION (HTML)
 // ======================================================
 
-const htmlDocPath = path.join(__dirname, "docs", "DOCUMENTATION.html");
-const codingStandardsPath = path.join(
-  __dirname,
-  "docs",
-  "CODING_STANDARDS.html",
-);
-const tablePermissionsDocPath = path.join(
-  __dirname,
-  "docs",
-  "TABLE_PERMISSIONS.html",
-);
+// appPath (execPath-relative when packaged) so these are read from the docs
+// folder shipped next to the binary — res.sendFile cannot serve a file embedded
+// under __dirname inside a compiled single-file binary.
+const htmlDocPath = appPath("docs", "DOCUMENTATION.html");
+const codingStandardsPath = appPath("docs", "CODING_STANDARDS.html");
+const tablePermissionsDocPath = appPath("docs", "TABLE_PERMISSIONS.html");
 
 app.get("/documentation", (req, res) => {
   return res.sendFile(htmlDocPath);

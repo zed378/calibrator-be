@@ -15,6 +15,7 @@ const archiver = require("archiver");
 const { logger } = require("../middlewares/activityLog.middleware");
 const { AppError } = require("../utils/appError.util");
 const { db } = require("../config");
+const storagePath = require("../utils/storagePath.util");
 
 // ==========================================
 // CONFIGURATION
@@ -43,7 +44,7 @@ exports.exportUserData = async (tenantId, userId, options = {}) => {
   }
 
   const exportId = generateExportId();
-  const exportDir = path.join(process.cwd(), "exports", exportId);
+  const exportDir = storagePath("exports", exportId);
 
   try {
     // Create export directory
@@ -245,7 +246,7 @@ async function exportCalibrationData(exportDir, tenantId, userId) {
  * Create ZIP archive of export
  */
 async function createZipArchive(exportDir, exportId) {
-  const zipPath = path.join(process.cwd(), "exports", `${exportId}.zip`);
+  const zipPath = storagePath("exports", `${exportId}.zip`);
   const output = fs.createWriteStream(zipPath);
   const archive = archiver("zip", { zlib: { level: 9 } });
 
