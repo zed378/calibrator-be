@@ -460,6 +460,16 @@ exports.approveCertificate = async (tenantId, certificateId, approvedBy, authOpt
       };
     }
 
+    // A certificate must be PENDING_APPROVAL to be approved. Surface an invalid
+    // transition as 409 (not a plain Error → 500). New certificates are DRAFT;
+    // callers must POST /:certificateId/submit first.
+    if (certificate.status !== "pending_approval") {
+      throw new AppError(
+        409,
+        `Cannot approve certificate with status: ${certificate.status}. Submit it for approval first.`,
+      );
+    }
+
     // Re-authenticate BEFORE mutating: the signature authorises the approval.
     await verifySignatureAuth(approvedBy, authOptions);
 
@@ -490,6 +500,42 @@ exports.approveCertificate = async (tenantId, certificateId, approvedBy, authOpt
     });
     throw error;
   }
+};
+
+/**
+ * Submit a DRAFT certificate for approval (DRAFT -> PENDING_APPROVAL) so it can
+ * then be approved. Without this transition, approve() is unreachable and 500s.
+ */
+exports.submitCertificateForApproval = async (tenantId, certificateId) => {
+  const certificate = await Certificate.findOne({
+    where: { id: certificateId, tenantId },
+  });
+
+  if (!certificate) {
+    return { success: false, status: 404, message: "Certificate not found", data: null };
+  }
+
+  if (certificate.status !== "draft") {
+    throw new AppError(
+      409,
+      `Cannot submit certificate for approval with status: ${certificate.status}`,
+    );
+  }
+
+  await certificate.submitForApproval();
+
+  logger.info("Certificate submitted for approval", {
+    certificateId,
+    certificateNumber: certificate.certificateNumber,
+    tenantId,
+  });
+
+  return {
+    success: true,
+    status: 200,
+    message: "Certificate submitted for approval",
+    data: certificate,
+  };
 };
 
 /**

@@ -383,6 +383,16 @@ router.post(
   certificateController.approveCertificate,
 );
 
+// Submit a DRAFT certificate for approval (DRAFT -> PENDING_APPROVAL). Without
+// this transition the approve action is unreachable. Same access as approve.
+router.post(
+  "/:certificateId/submit",
+  auth,
+  validateUuid("certificateId"),
+  dynamicAccess("certificate", "approve"),
+  certificateController.submitCertificate,
+);
+
 /**
  * @swagger
  * /api/v1/certificates/{certificateId}/sign:

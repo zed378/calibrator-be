@@ -10,6 +10,7 @@ jest.mock("../../config/migrate", () => ({
 jest.mock("../../services/migration.service", () => ({
   seedAll: jest.fn(),
   unseedAll: jest.fn(),
+  seedDemoData: jest.fn(),
 }));
 
 jest.mock("../../utils/response.util", () => ({
@@ -122,6 +123,29 @@ describe("migration Controller", () => {
       migrationService.unseedAll.mockRejectedValue(new Error("Unseed failed"));
 
       await migrationController.unseeding(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(next.mock.calls[0][0].status).toBe(500);
+    });
+  });
+
+  describe("seedDemo", () => {
+    it("should call migrationService.seedDemoData and respond", async () => {
+      migrationService.seedDemoData.mockResolvedValue({
+        success: true,
+      });
+
+      await migrationController.seedDemo(req, res, next);
+
+      expect(migrationService.seedDemoData).toHaveBeenCalled();
+      expect(success).toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it("should handle seedDemoData rejection", async () => {
+      migrationService.seedDemoData.mockRejectedValue(new Error("Seed demo failed"));
+
+      await migrationController.seedDemo(req, res, next);
 
       expect(next).toHaveBeenCalled();
       expect(next.mock.calls[0][0].status).toBe(500);

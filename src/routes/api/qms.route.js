@@ -8,6 +8,8 @@
 const express = require("express");
 const router = express.Router();
 const { auth, denyApiKey } = require("../../middlewares/auth.middleware");
+const { validate } = require("../../middlewares/validation.middleware");
+const { updateNCSchema, updateCapaSchema } = require("../../validators/qms.validator");
 const {
   createNC,
   getNCs,
@@ -130,7 +132,7 @@ router.get("/nc", getNCs);
  *       404:
  *         description: Non-conformance not found
  */
-router.patch("/nc/:id", denyApiKey, updateNC);
+router.patch("/nc/:id", denyApiKey, validate(updateNCSchema), updateNC);
 
 // CAPA Routes
 /**
@@ -250,6 +252,6 @@ router.get("/capa", getCapas);
  *       404:
  *         description: CAPA not found
  */
-router.patch("/capa/:id", denyApiKey, updateCapa);
+router.patch("/capa/:id", denyApiKey, validate(updateCapaSchema), updateCapa);
 
 module.exports = router;

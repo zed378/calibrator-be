@@ -38,3 +38,12 @@ exports.unseeding = asyncHandler(async (req, res) => {
   const result = await migrationService.unseedAll();
   success(res, result, null, "Unseeding success", 200);
 });
+
+// ==========================================
+// DEMO DATA SEEDING
+// ==========================================
+
+exports.seedDemo = asyncHandler(async (req, res) => {
+  const result = await migrationService.seedDemoData();
+  success(res, result, null, "Demo data seeding success", 200);
+});

@@ -13,12 +13,17 @@ exports.createNC = asyncHandlerWithMapping(async (req, res) => {
 
 exports.getNCs = asyncHandlerWithMapping(async (req, res) => {
   const { page, limit, status } = req.query;
-  const result = await qmsService.getNCs(req.user.tenantId, page, limit, status);
+  const { nonConformances, total, page: currentPage, limit: pageLimit, totalPages } =
+    await qmsService.getNCs(req.user.tenantId, page, limit, status);
   return {
     success: true,
     status: 200,
     message: "Non-Conformances retrieved successfully",
-    data: result,
+    // House envelope: rows in `data`, pagination in a top-level `meta` sibling
+    // (matches risk/audit). Previously the whole { total, …, nonConformances }
+    // object sat in `data`, so a frontend reading data as an array saw nothing.
+    data: nonConformances,
+    meta: { total, page: currentPage, limit: pageLimit, totalPages },
   };
 }, {});
 
@@ -48,12 +53,14 @@ exports.createCapa = asyncHandlerWithMapping(async (req, res) => {
 
 exports.getCapas = asyncHandlerWithMapping(async (req, res) => {
   const { page, limit, status } = req.query;
-  const result = await qmsService.getCapas(req.user.tenantId, page, limit, status);
+  const { capas, total, page: currentPage, limit: pageLimit, totalPages } =
+    await qmsService.getCapas(req.user.tenantId, page, limit, status);
   return {
     success: true,
     status: 200,
     message: "CAPAs retrieved successfully",
-    data: result,
+    data: capas,
+    meta: { total, page: currentPage, limit: pageLimit, totalPages },
   };
 }, {});
 

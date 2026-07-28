@@ -19980,6 +19980,23 @@
           }
         }
       }
+    },
+    "/api/v1/migration/seed-demo": {
+      "get": {
+        "summary": "Seed the database with realistic demo data for every module",
+        "description": "Flag-gated (SEED_DEMO=true) and idempotent. Populates a small, realistic slice of every business module so a freshly-deployed UI has content.\n",
+        "tags": [
+          "Migration"
+        ],
+        "responses": {
+          "200": {
+            "description": "Demo data seeding successful"
+          },
+          "403": {
+            "description": "Disabled (SEED_DEMO not set) or not authorised"
+          }
+        }
+      }
     }
   },
   "components": {

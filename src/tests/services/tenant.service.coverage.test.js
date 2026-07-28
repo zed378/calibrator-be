@@ -426,11 +426,12 @@ describe("tenant.service - branch & error coverage", () => {
       expect(Tenants.create.mock.calls[0][0]).toEqual({
         name: "New",
         code: "NEW",
+        subdomain: "new",
         description: null,
         logo: "default.svg",
         primaryColor: null,
         maxUsers: 10,
-        email: null,
+        email: "new@example.com",
         phone: null,
         address: null,
         city: null,
@@ -449,6 +450,7 @@ describe("tenant.service - branch & error coverage", () => {
         {
           name: "Full",
           code: "FUL",
+          subdomain: "custom-subdomain",
           description: "desc",
           logo: "l.png",
           primaryColor: "#123456",
@@ -472,8 +474,18 @@ describe("tenant.service - branch & error coverage", () => {
           primaryColor: "#123456",
           maxUsers: 99,
           website: "https://x.com",
+          subdomain: "custom-subdomain",
         }),
       );
+    });
+
+    it("should handle subdomain generation fallback when input and code strip to empty", async () => {
+      const created = makeTenant({ id: "t-fallback", code: "-" });
+      Tenants.create.mockResolvedValue(created);
+
+      await tenantService.createTenant({ name: "Fallback", code: "-" }, "creator-1");
+
+      expect(Tenants.create.mock.calls[0][0].subdomain).toBe("-");
     });
 
     it("should prime both caches and invalidate the list cache on success", async () => {

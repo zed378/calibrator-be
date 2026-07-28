@@ -23,8 +23,8 @@ exports.getRisks = async (tenantId, query) => {
     offset: parseInt(offset),
     order: [["createdAt", "DESC"]],
     include: [
-      { model: User, as: "identifier", attributes: ["id", "firstName", "lastName", "email"] },
-      { model: User, as: "assignee", attributes: ["id", "firstName", "lastName", "email"] }
+      { model: User, as: "identifier", attributes: ["id", "firstName", "lastName", "email"], required: false },
+      { model: User, as: "assignee", attributes: ["id", "firstName", "lastName", "email"], required: false }
     ]
   });
 
@@ -40,8 +40,8 @@ exports.getRiskById = async (tenantId, id) => {
   const risk = await Risk.findOne({
     where: { id, tenantId },
     include: [
-      { model: User, as: "identifier", attributes: ["id", "firstName", "lastName", "email"] },
-      { model: User, as: "assignee", attributes: ["id", "firstName", "lastName", "email"] }
+      { model: User, as: "identifier", attributes: ["id", "firstName", "lastName", "email"], required: false },
+      { model: User, as: "assignee", attributes: ["id", "firstName", "lastName", "email"], required: false }
     ]
   });
   if (!risk) throw new AppError(404, "Risk not found");

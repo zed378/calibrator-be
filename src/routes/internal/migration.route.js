@@ -7,6 +7,7 @@ const {
   dropTable,
   seeding,
   unseeding,
+  seedDemo,
 } = require("../../controllers/migration.controller");
 
 /**
@@ -44,6 +45,22 @@ const superAdminOrBootstrap = (req, res, next) => {
   return auth(req, res, (err) =>
     err ? next(err) : superAdminOnly(req, res, next),
   );
+};
+
+/**
+ * Guard for the demo-data seeder. Demo content is only ever appropriate in a
+ * demonstration environment, so it requires an explicit SEED_DEMO=true opt-in
+ * IN ADDITION TO the standard super-admin / bootstrap authentication. Without
+ * the flag the endpoint 403s regardless of who is calling.
+ */
+const allowDemoSeeding = (req, res, next) => {
+  if (process.env.SEED_DEMO !== "true") {
+    return forbidden(
+      res,
+      "Demo data seeding is disabled. Set SEED_DEMO=true to enable.",
+    );
+  }
+  return next();
 };
 
 /**
@@ -224,5 +241,23 @@ router.get("/seeding", superAdminOrBootstrap, seeding);
  *                   example: Unseeding failed
  */
 router.get("/unseeding", auth, superAdminOnly, allowDestructive, unseeding);
+
+/**
+ * @swagger
+ * /api/v1/migration/seed-demo:
+ *   get:
+ *     summary: Seed the database with realistic demo data for every module
+ *     description: >
+ *       Flag-gated (SEED_DEMO=true) and idempotent. Populates a small, realistic
+ *       slice of every business module so a freshly-deployed UI has content.
+ *     tags:
+ *       - Migration
+ *     responses:
+ *       '200':
+ *         description: Demo data seeding successful
+ *       '403':
+ *         description: Disabled (SEED_DEMO not set) or not authorised
+ */
+router.get("/seed-demo", superAdminOrBootstrap, allowDemoSeeding, seedDemo);
 
 module.exports = router;

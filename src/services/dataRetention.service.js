@@ -145,7 +145,9 @@ exports.purgeExpiredRecords = async (tenantId) => {
       case 'sessions':
         deletedCount = await Session.destroy({
           where: {
-            tenantId,
+            // The Session model names this attribute `tenant_id` (not tenantId),
+            // so querying by `tenantId` throws "column tenantId does not exist".
+            tenant_id: tenantId,
             createdAt: { [Op.lt]: cutoff },
           },
         });

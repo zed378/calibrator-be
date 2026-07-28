@@ -26,11 +26,11 @@ exports.suspendTenant = async (tenantId, reason, suspendedBy = null) => {
     throw new AppError(404, 'Tenant not found');
   }
 
-  if (tenant.status === 'SUSPENDED') {
+  if (tenant.status === 'suspended') {
     return tenant;
   }
 
-  tenant.status = 'SUSPENDED';
+  tenant.status = 'suspended';
   tenant.suspensionReason = reason;
   tenant.suspendedAt = new Date();
   tenant.suspendedBy = suspendedBy;
@@ -53,11 +53,11 @@ exports.resumeTenant = async (tenantId, resumedBy = null) => {
     throw new AppError(404, 'Tenant not found');
   }
 
-  if (tenant.status === 'ACTIVE') {
+  if (tenant.status === 'active') {
     return tenant;
   }
 
-  tenant.status = 'ACTIVE';
+  tenant.status = 'active';
   tenant.suspensionReason = null;
   tenant.suspendedAt = null;
   tenant.suspendedBy = null;
@@ -109,19 +109,27 @@ exports.offboardTenant = async (tenantId, force = false) => {
     throw new AppError(404, 'Tenant not found');
   }
 
-  if (tenant.status === 'OFFBOARDED' && !force) {
+  if (tenant.status === 'deleted' && !force) {
     return tenant;
   }
 
   const exportData = await this.exportTenantData(tenantId);
 
-  tenant.status = 'OFFBOARDED';
+  tenant.status = 'deleted';
   tenant.offboardedAt = new Date();
   tenant.offboardRetentionExpiresAt = new Date();
   tenant.offboardRetentionExpiresAt.setDate(
     tenant.offboardRetentionExpiresAt.getDate() + OFFBOARD_RETENTION_DAYS
   );
   await tenant.save();
+
+  // tenant.status uses the enum's terminal 'deleted'; the granular lifecycle
+  // state lives in the lifecycle_status setting that getStatus surfaces.
+  await TenantSettings.upsert({
+    tenantId,
+    key: 'lifecycle_status',
+    value: 'OFFBOARDED',
+  });
 
   await logger.warn(`Tenant offboarded: ${tenantId}`, {
     retentionDays: OFFBOARD_RETENTION_DAYS,
@@ -137,11 +145,11 @@ exports.cancelOffboarding = async (tenantId) => {
     throw new AppError(404, 'Tenant not found');
   }
 
-  if (tenant.status !== 'OFFBOARDED') {
+  if (tenant.status !== 'deleted') {
     throw new AppError(400, 'Tenant is not offboarded');
   }
 
-  tenant.status = 'ACTIVE';
+  tenant.status = 'active';
   tenant.offboardedAt = null;
   tenant.offboardRetentionExpiresAt = null;
   await tenant.save();
@@ -157,7 +165,7 @@ exports.hardDeleteOffboardedTenant = async (tenantId) => {
     throw new AppError(404, 'Tenant not found');
   }
 
-  if (tenant.status !== 'OFFBOARDED') {
+  if (tenant.status !== 'deleted') {
     throw new AppError(400, 'Tenant is not offboarded');
   }
 

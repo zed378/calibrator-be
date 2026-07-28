@@ -335,6 +335,20 @@ exports.createTenant = async (input, createdBy) => {
     website,
   } = data;
 
+  // The model requires a unique lowercase `subdomain` (never collected by the
+  // create form/validator) and a non-null `email` (which the form treats as
+  // optional). Derive a schema-valid subdomain from the required, unique code,
+  // and fall back to a code-based email — otherwise a minimal payload hits a
+  // notNull violation and returns 500 instead of creating the tenant.
+  const subdomain =
+    (input.subdomain || code)
+      .toString()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 63) || code.toString().toLowerCase();
+  const tenantEmail = email || `${subdomain}@example.com`;
+
   const transaction = await db.transaction();
 
   try {
@@ -364,11 +378,12 @@ exports.createTenant = async (input, createdBy) => {
       {
         name,
         code,
+        subdomain,
         description: description || null,
         logo: logo || "default.svg",
         primaryColor: primaryColor || null,
         maxUsers: maxUsers || 10,
-        email: email || null,
+        email: tenantEmail,
         phone: phone || null,
         address: address || null,
         city: city || null,

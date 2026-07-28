@@ -36,7 +36,7 @@ describe("Migration Routes", () => {
 
   it("should have multiple route handlers registered", () => {
     const allRoutes = migrationRoutes.stack.filter((layer) => layer.route);
-    expect(allRoutes.length).toBe(4);
+    expect(allRoutes.length).toBe(5);
   });
 
   it("should have GET /up route", () => {
@@ -83,6 +83,17 @@ describe("Migration Routes", () => {
     expect(routes.length).toBe(1);
   });
 
+  it("should have GET /seed-demo route", () => {
+    const routes = migrationRoutes.stack.filter(
+      (layer) =>
+        layer.route &&
+        layer.route.path === "/seed-demo" &&
+        layer.route.methods &&
+        layer.route.methods.get,
+    );
+    expect(routes.length).toBe(1);
+  });
+
   it("should have middleware or routes in stack", () => {
     const hasMiddleware = migrationRoutes.stack.some(
       (layer) => !layer.route,
@@ -106,7 +117,7 @@ describe("Migration Routes", () => {
     const routeCount = migrationRoutes.stack.filter(
       (layer) => layer.route,
     ).length;
-    expect(routeCount).toBe(4);
+    expect(routeCount).toBe(5);
   });
 
   // --------------------------------------------------------------------
@@ -245,6 +256,42 @@ describe("Migration Routes", () => {
       guard()({}, makeRes(), next);
 
       expect(auth).toHaveBeenCalled();
+    });
+  });
+
+  describe("allowDemoSeeding", () => {
+    const guard = () => guardFor("/seed-demo", "allowDemoSeeding");
+    const ORIGINAL_SEED_DEMO = process.env.SEED_DEMO;
+
+    afterEach(() => {
+      if (ORIGINAL_SEED_DEMO === undefined) delete process.env.SEED_DEMO;
+      else process.env.SEED_DEMO = ORIGINAL_SEED_DEMO;
+    });
+
+    it("is wired onto the seed-demo route", () => {
+      expect(typeof guard()).toBe("function");
+    });
+
+    it("blocks when SEED_DEMO is not set to true", () => {
+      delete process.env.SEED_DEMO;
+      const next = jest.fn();
+      const res = makeRes();
+
+      guard()({}, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(forbidden).toHaveBeenCalled();
+    });
+
+    it("allows when SEED_DEMO is set to true", () => {
+      process.env.SEED_DEMO = "true";
+      const next = jest.fn();
+      const res = makeRes();
+
+      guard()({}, res, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(forbidden).not.toHaveBeenCalled();
     });
   });
 });

@@ -98,6 +98,7 @@ const {
   updateCertificate,
   deleteCertificate,
   approveCertificate,
+  submitCertificateForApproval,
   signCertificate,
   revokeCertificate,
   getCertificateStats,
@@ -449,6 +450,7 @@ describe("certificate.service", () => {
       const mockCert = {
         id: "cert-1",
         certificateNumber: "C1",
+        status: "pending_approval",
         approve: jest.fn().mockResolvedValueOnce(true),
         save: jest.fn().mockResolvedValueOnce(true),
       };
@@ -477,6 +479,7 @@ describe("certificate.service", () => {
       const mockCert = {
         id: "cert-1",
         certificateNumber: "C1",
+        status: "pending_approval",
         approve: jest.fn(),
         save: jest.fn(),
       };
@@ -500,6 +503,7 @@ describe("certificate.service", () => {
     it("must NOT mutate the certificate when the e-signature payload is incomplete", async () => {
       const mockCert = {
         id: "cert-1",
+        status: "pending_approval",
         approve: jest.fn(),
         save: jest.fn(),
       };
@@ -521,6 +525,7 @@ describe("certificate.service", () => {
       const mockCert = {
         id: "cert-1",
         certificateNumber: "C1",
+        status: "pending_approval",
         approve: jest.fn().mockResolvedValueOnce(true),
         save: jest.fn().mockResolvedValueOnce(true),
       };
@@ -543,6 +548,63 @@ describe("certificate.service", () => {
           documentHash: expect.any(String),
         }),
       );
+    });
+
+    it("should throw 409 if status is not pending_approval", async () => {
+      const mockCert = {
+        id: "cert-1",
+        status: "draft",
+        approve: jest.fn(),
+        save: jest.fn(),
+      };
+      Certificate.findOne.mockResolvedValueOnce(mockCert);
+
+      await expect(
+        approveCertificate("tenant-1", "cert-1", "user-2", {
+          authMethod: "password",
+          authPayload: "correct-password",
+          meaning: "Approved",
+        }),
+      ).rejects.toMatchObject({ status: 409 });
+    });
+  });
+
+  describe("submitCertificateForApproval", () => {
+    it("should submit a draft certificate for approval successfully", async () => {
+      const mockCert = {
+        id: "cert-1",
+        certificateNumber: "C1",
+        status: "draft",
+        submitForApproval: jest.fn().mockResolvedValueOnce(true),
+      };
+      Certificate.findOne.mockResolvedValueOnce(mockCert);
+
+      const result = await submitCertificateForApproval("tenant-1", "cert-1");
+
+      expect(result.success).toBe(true);
+      expect(result.status).toBe(200);
+      expect(mockCert.submitForApproval).toHaveBeenCalled();
+    });
+
+    it("should return 404 if certificate not found", async () => {
+      Certificate.findOne.mockResolvedValueOnce(null);
+
+      const result = await submitCertificateForApproval("tenant-1", "cert-1");
+
+      expect(result.success).toBe(false);
+      expect(result.status).toBe(404);
+    });
+
+    it("should throw 409 if certificate is not in draft status", async () => {
+      const mockCert = {
+        id: "cert-1",
+        status: "approved",
+      };
+      Certificate.findOne.mockResolvedValueOnce(mockCert);
+
+      await expect(
+        submitCertificateForApproval("tenant-1", "cert-1"),
+      ).rejects.toMatchObject({ status: 409 });
     });
   });
 

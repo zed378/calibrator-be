@@ -96,11 +96,13 @@ describe("riskService", () => {
             model: User,
             as: "identifier",
             attributes: ["id", "firstName", "lastName", "email"],
+            required: false,
           },
           {
             model: User,
             as: "assignee",
             attributes: ["id", "firstName", "lastName", "email"],
+            required: false,
           },
         ],
       });
@@ -148,11 +150,13 @@ describe("riskService", () => {
             model: User,
             as: "identifier",
             attributes: ["id", "firstName", "lastName", "email"],
+            required: false,
           },
           {
             model: User,
             as: "assignee",
             attributes: ["id", "firstName", "lastName", "email"],
+            required: false,
           },
         ],
       });
@@ -202,11 +206,13 @@ describe("riskService", () => {
             model: User,
             as: "identifier",
             attributes: ["id", "firstName", "lastName", "email"],
+            required: false,
           },
           {
             model: User,
             as: "assignee",
             attributes: ["id", "firstName", "lastName", "email"],
+            required: false,
           },
         ],
       });

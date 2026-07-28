@@ -46,6 +46,9 @@ jest.mock("../../models", () => {
     Certificate: mockCertificate,
     StockTransfer: mockStockTransfer,
     MaintenanceWorkOrder: mockMaintenanceWorkOrder,
+    sequelize: {
+      transaction: jest.fn(() => Promise.resolve(mockTransaction)),
+    },
     db: {
       sequelize: {
         transaction: jest.fn(() => Promise.resolve(mockTransaction)),

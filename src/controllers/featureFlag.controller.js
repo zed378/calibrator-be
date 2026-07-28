@@ -29,7 +29,9 @@ exports.isFlagEnabled = asyncHandler(async (req, res) => {
 });
 
 exports.setTenantFlag = asyncHandler(async (req, res) => {
-  const validated = validate(req.body, flagValueSchema);
+  // tenantId + flagKey are path params (:tenantId/:flagKey); merge with the
+  // body (which carries `enabled`) so the documented { enabled } payload works.
+  const validated = validate({ ...req.params, ...req.body }, flagValueSchema);
   const result = await featureFlagService.setTenantFlag(
     validated.tenantId,
     validated.flagKey,

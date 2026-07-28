@@ -9,6 +9,7 @@ jest.mock("../../services/certificate.service", () => ({
   updateCertificate: jest.fn(),
   deleteCertificate: jest.fn(),
   approveCertificate: jest.fn(),
+  submitCertificateForApproval: jest.fn(),
   signCertificate: jest.fn(),
   revokeCertificate: jest.fn(),
   getCertificateStats: jest.fn(),
@@ -176,6 +177,26 @@ describe("certificateController", () => {
       await certificateController.deleteCertificate(req, res);
 
       expect(certificateService.deleteCertificate).toHaveBeenCalledWith(
+        "tenant-1",
+        "c-1",
+      );
+      expect(success).toHaveBeenCalled();
+    });
+  });
+
+  describe("submitCertificate", () => {
+    it("should submit certificate successfully", async () => {
+      req.params = { certificateId: "c-1" };
+      certificateService.submitCertificateForApproval.mockResolvedValueOnce({
+        success: true,
+        status: 200,
+        message: "Success",
+        data: { id: "c-1" },
+      });
+
+      await certificateController.submitCertificate(req, res);
+
+      expect(certificateService.submitCertificateForApproval).toHaveBeenCalledWith(
         "tenant-1",
         "c-1",
       );

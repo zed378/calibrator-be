@@ -13,12 +13,15 @@ exports.createDocument = asyncHandlerWithMapping(async (req, res) => {
 
 exports.getDocuments = asyncHandlerWithMapping(async (req, res) => {
   const { page, limit, status } = req.query;
-  const result = await sopService.getDocuments(req.user.tenantId, page, limit, status);
+  const { documents, total, page: currentPage, limit: pageLimit, totalPages } =
+    await sopService.getDocuments(req.user.tenantId, page, limit, status);
   return {
     success: true,
     status: 200,
     message: "Documents retrieved successfully",
-    data: result,
+    // House envelope: rows in `data`, pagination in a top-level `meta` sibling.
+    data: documents,
+    meta: { total, page: currentPage, limit: pageLimit, totalPages },
   };
 }, {});
 

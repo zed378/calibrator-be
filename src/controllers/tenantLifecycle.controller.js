@@ -8,7 +8,9 @@ const {
 } = require("../validators/tenantLifecycle.validator");
 
 exports.suspendTenant = asyncHandler(async (req, res) => {
-  const validated = validate(req.body, suspendTenantSchema);
+  // tenantId comes from the path (:tenantId); the body carries { reason }.
+  // Merge so a correctly-formed call (id in path, reason in body) validates.
+  const validated = validate({ ...req.params, ...req.body }, suspendTenantSchema);
   const result = await tenantLifecycleService.suspendTenant(
     validated.tenantId,
     validated.reason,

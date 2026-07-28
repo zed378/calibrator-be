@@ -175,10 +175,10 @@ describe("Certificates Routes", () => {
     });
   });
 
-  it("should have exactly 12 route endpoints", () => {
+  it("should have exactly 13 route endpoints", () => {
     const routeCount = certificatesRoutes.stack.filter(
       (layer) => layer.route,
     ).length;
-    expect(routeCount).toBe(12);
+    expect(routeCount).toBe(13);
   });
 });

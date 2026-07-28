@@ -242,6 +242,21 @@ const defineModel = (db, DataTypes) => {
   };
 
   /**
+   * Instance method to submit a DRAFT certificate for approval.
+   * Transitions DRAFT -> PENDING_APPROVAL so approve() becomes reachable.
+   * @returns {Promise<void>}
+   */
+  Certificate.prototype.submitForApproval = async function () {
+    if (this.status !== STATUS.DRAFT) {
+      throw new Error(
+        `Cannot submit certificate for approval with status: ${this.status}`,
+      );
+    }
+    this.status = STATUS.PENDING_APPROVAL;
+    await this.save();
+  };
+
+  /**
    * Instance method to approve the certificate.
    * @returns {Promise<void>}
    */

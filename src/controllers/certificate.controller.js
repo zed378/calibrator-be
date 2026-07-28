@@ -140,6 +140,16 @@ exports.approveCertificate = asyncHandler(async (req, res) => {
  * POST /api/certificates/:certificateId/sign
  * Sign a certificate digitally
  */
+exports.submitCertificate = asyncHandler(async (req, res) => {
+  const tenantId = req.user.tenantId;
+  const { certificateId } = validate(req.params, certificateIdSchema);
+  const result = await certificateService.submitCertificateForApproval(
+    tenantId,
+    certificateId,
+  );
+  success(res, result.data, null, result.message, result.status);
+});
+
 exports.signCertificate = asyncHandler(async (req, res) => {
   const tenantId = req.user.tenantId;
   const { certificateId } = validate(req.params, certificateIdSchema);

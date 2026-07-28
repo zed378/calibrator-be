@@ -10,6 +10,11 @@ const retentionPolicySchema = Joi.object({
   days: Joi.number().integer().min(0).required(),
 });
 
+const legalHoldSchema = Joi.object({
+  tenantId: Joi.string().uuid().required(),
+  reason: Joi.string().optional(),
+});
+
 const piiMaskSchema = Joi.object({
   tenantId: Joi.string().uuid().required(),
   entityType: Joi.string().required(),
@@ -49,6 +54,7 @@ const validate = (data, schema) => {
 module.exports = {
   tenantIdSchema,
   retentionPolicySchema,
+  legalHoldSchema,
   piiMaskSchema,
   anonymizeSchema,
   validate,

@@ -218,15 +218,17 @@ const verifyAccessToken = (token) => {
         if (!publicKey) {
           continue;
         }
+        // Do NOT cap with maxAge here: access tokens are signed with
+        // expiresIn = JWT_ACCESS_EXPIRED (1d by default). jwt.verify already
+        // enforces the token's own `exp`; a hardcoded maxAge:"15m" silently
+        // rejected every token 15 min after issuance regardless of exp.
         return jwt.verify(token, publicKey, {
           algorithms: [algorithm],
-          maxAge: "15m",
         });
       }
 
       return jwt.verify(token, keyInfo.secret, {
         algorithms: [algorithm],
-        maxAge: "15m",
       });
     } catch (err) {
       // Try next key
@@ -241,7 +243,6 @@ const verifyAccessToken = (token) => {
   try {
     return jwt.verify(token, ACCESS_SECRET, {
       algorithms: ["HS256"],
-      maxAge: "15m",
     });
   } catch {
     throw new Error("Invalid or expired access token");

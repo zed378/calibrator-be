@@ -4,6 +4,7 @@ const { success, error } = require("../utils/response.util");
 const {
   tenantIdSchema,
   retentionPolicySchema,
+  legalHoldSchema,
   piiMaskSchema,
   anonymizeSchema,
   validate,
@@ -17,7 +18,9 @@ exports.getRetentionPolicy = asyncHandler(async (req, res) => {
 });
 
 exports.setRetentionPolicy = asyncHandler(async (req, res) => {
-  const validated = validate(req.body, retentionPolicySchema);
+  // `tenantId` arrives as a path param (:tenantId); merge it with the body so
+  // the frontend does not have to redundantly repeat it in the payload.
+  const validated = validate({ ...req.params, ...req.body }, retentionPolicySchema);
   const result = await dataRetentionService.setRetentionPolicy(
     validated.tenantId,
     validated.policyKey,
@@ -35,10 +38,7 @@ exports.isOnLegalHold = asyncHandler(async (req, res) => {
 });
 
 exports.enableLegalHold = asyncHandler(async (req, res) => {
-  const validated = validate(req.body, {
-    ...tenantIdSchema,
-    reason: { type: "string", optional: true },
-  });
+  const validated = validate({ ...req.params, ...req.body }, legalHoldSchema);
   const result = await dataRetentionService.enableLegalHold(
     validated.tenantId,
     req.user?.id,
@@ -66,7 +66,7 @@ exports.purgeExpiredRecords = asyncHandler(async (req, res) => {
 });
 
 exports.maskPII = asyncHandler(async (req, res) => {
-  const validated = validate(req.body, piiMaskSchema);
+  const validated = validate({ ...req.params, ...req.body }, piiMaskSchema);
   const result = await dataRetentionService.maskPII(
     validated.tenantId,
     validated.entityType,
@@ -77,7 +77,7 @@ exports.maskPII = asyncHandler(async (req, res) => {
 });
 
 exports.anonymizeDataset = asyncHandler(async (req, res) => {
-  const validated = validate(req.body, anonymizeSchema);
+  const validated = validate({ ...req.params, ...req.body }, anonymizeSchema);
   const result = await dataRetentionService.anonymizeDataset(
     validated.tenantId,
     validated.entityType,

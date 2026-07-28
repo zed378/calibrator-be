@@ -8,7 +8,7 @@ const {
   MaintenanceWorkOrder,
   User,
   Role,
-  db
+  sequelize
 } = require("../models");
 // NOTE: utils/appError exports an object — AppError must be destructured.
 // (`const AppError = require(...)` made `new AppError(...)` throw
@@ -51,7 +51,7 @@ class WorkflowService {
   }
 
   async createWorkflow(tenantId, data) {
-    const t = await db.sequelize.transaction();
+    const t = await sequelize.transaction();
     try {
       // Check if a workflow for this resourceType already exists (only one active per resource)
       if (data.isActive !== false) {
@@ -89,7 +89,7 @@ class WorkflowService {
 
   async updateWorkflow(tenantId, id, data) {
     const workflow = await this.getWorkflowById(tenantId, id);
-    const t = await db.sequelize.transaction();
+    const t = await sequelize.transaction();
 
     try {
       if (data.name !== undefined) workflow.name = data.name;
@@ -255,7 +255,7 @@ class WorkflowService {
       throw new AppError(400, "You have already submitted an action for this step");
     }
 
-    const t = await db.sequelize.transaction();
+    const t = await sequelize.transaction();
     try {
       await WorkflowAction.create(
         {
