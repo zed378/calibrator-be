@@ -32,11 +32,40 @@ jest.mock("../../services/emailQueue.service", () => ({
   emailQueueService: { queueEmail: jest.fn().mockResolvedValue(undefined) },
 }));
 
+jest.mock("dns", () => ({ promises: { resolveTxt: jest.fn() } }));
+
+jest.mock("fs", () => ({
+  promises: {
+    mkdir: jest.fn().mockResolvedValue(),
+    writeFile: jest.fn().mockResolvedValue(),
+    unlink: jest.fn().mockResolvedValue(),
+  },
+}));
+
+jest.mock("acme-client", () => ({
+  directory: {
+    letsencrypt: { staging: "https://acme-staging", production: "https://acme-prod" },
+  },
+  crypto: {
+    createPrivateKey: jest.fn().mockResolvedValue(Buffer.from("ACCOUNT_KEY")),
+    createCsr: jest.fn().mockResolvedValue([Buffer.from("CERT_KEY"), Buffer.from("CSR")]),
+  },
+  Client: jest.fn(),
+}));
+
+jest.mock("../../services/kms.service", () => ({
+  encryptData: jest.fn(() => ({ ciphertext: "enc", iv: "iv", authTag: "tag" })),
+}));
+
 const svc = require("../../services/customDomains.service");
 const { AppError } = require("../../utils/appError.util");
 const { logger } = require("../../middlewares/activityLog.middleware");
 const { CustomDomain, User } = require("../../models");
 const { emailQueueService } = require("../../services/emailQueue.service");
+const dns = require("dns").promises;
+const fs = require("fs");
+const acme = require("acme-client");
+const kms = require("../../services/kms.service");
 
 const makeRecord = (over = {}) => {
   const rec = {
@@ -76,6 +105,8 @@ describe("customDomainsService", () => {
       sslEnabled: true,
     });
     User.findOne.mockResolvedValue({ email: "admin@example.com" });
+    // Default: the DNS TXT record matches makeRecord's default token.
+    dns.resolveTxt.mockResolvedValue([["callibrator-verify=abc123"]]);
   });
 
   describe("getTenantDomains", () => {
@@ -206,14 +237,48 @@ describe("customDomainsService", () => {
   });
 
   describe("verifyDomain", () => {
-    it("activates the domain on successful DNS check", async () => {
+    it("activates the domain when the TXT token matches", async () => {
       const rec = makeRecord();
       CustomDomain.findOne.mockResolvedValueOnce(rec);
+      // Record split across chunks to exercise the join.
+      dns.resolveTxt.mockResolvedValueOnce([["callibrator-verify=", "abc123"]]);
+
       const res = await svc.verifyDomain("tenant-1", "d-1");
+
+      expect(dns.resolveTxt).toHaveBeenCalledWith("_domain_verify.app.example.com");
       expect(res.verified).toBe(true);
       expect(res.status).toBe("active");
       expect(rec.update).toHaveBeenCalledWith(
         expect.objectContaining({ status: "active" }),
+      );
+    });
+
+    it("marks verification_failed when the token is absent from DNS", async () => {
+      const rec = makeRecord();
+      CustomDomain.findOne.mockResolvedValueOnce(rec);
+      dns.resolveTxt.mockResolvedValueOnce([["some-other-token"]]);
+
+      const res = await svc.verifyDomain("tenant-1", "d-1");
+
+      expect(res.verified).toBe(false);
+      expect(res.status).toBe("verification_failed");
+      expect(res.record).toBeNull();
+      expect(rec.update).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "verification_failed", verifiedAt: null }),
+      );
+    });
+
+    it("treats a DNS lookup error as unverified", async () => {
+      const rec = makeRecord();
+      CustomDomain.findOne.mockResolvedValueOnce(rec);
+      dns.resolveTxt.mockRejectedValueOnce(new Error("ENOTFOUND"));
+
+      const res = await svc.verifyDomain("tenant-1", "d-1");
+
+      expect(res.verified).toBe(false);
+      expect(logger.debug).toHaveBeenCalledWith(
+        "DNS TXT lookup failed",
+        expect.objectContaining({ error: "ENOTFOUND" }),
       );
     });
 
@@ -231,11 +296,13 @@ describe("customDomainsService", () => {
     it("generates a token when the record has none stored", async () => {
       const rec = makeRecord({ verificationToken: null });
       CustomDomain.findOne.mockResolvedValueOnce(rec);
+      // A freshly generated random token won't be in DNS yet → unverified.
+      dns.resolveTxt.mockResolvedValueOnce([["stale"]]);
 
       const res = await svc.verifyDomain("tenant-1", "d-1");
 
-      expect(res.verified).toBe(true);
-      expect(res.record).toMatch(/^callibrator-verify=[0-9a-f]{32}$/);
+      expect(res.verified).toBe(false);
+      expect(res.dnsRecord.value).toMatch(/^callibrator-verify=[0-9a-f]{32}$/);
       expect(res.dnsRecord.name).toBe("_domain_verify.app.example.com");
     });
 
@@ -383,20 +450,52 @@ describe("customDomainsService", () => {
   });
 
   describe("provisionTLSCertificate + status + constants", () => {
-    it("provisions when enabled", async () => {
-      process.env.TLS_AUTO_PROVISION = "true";
-      const res = await svc.provisionTLSCertificate("x.com");
-      expect(res.success).toBe(true);
+    // An `auto` implementation that also exercises the http-01 challenge
+    // create/remove callbacks (and their non-http-01 early-return branches).
+    const autoWithChallenges = jest.fn(async (opts) => {
+      await opts.challengeCreateFn({}, { type: "http-01", token: "tok" }, "KEYAUTH");
+      await opts.challengeCreateFn({}, { type: "dns-01", token: "x" }, "y");
+      await opts.challengeRemoveFn({}, { type: "http-01", token: "tok" });
+      await opts.challengeRemoveFn({}, { type: "dns-01", token: "x" });
+      return Buffer.from("CERT_PEM");
     });
-    it("returns the simulated certificate window when enabled", async () => {
+
+    beforeEach(() => {
+      acme.Client.mockImplementation(() => ({ auto: autoWithChallenges }));
+      // Exercise the unlink .catch() swallow path.
+      fs.promises.unlink.mockRejectedValue(new Error("already gone"));
+    });
+
+    it("issues a certificate via ACME and encrypts the key for a tenant", async () => {
       process.env.TLS_AUTO_PROVISION = "true";
+
+      const res = await svc.provisionTLSCertificate("x.com", "tenant-1");
+
+      expect(res.success).toBe(true);
+      expect(res.certificate.domain).toBe("x.com");
+      expect(res.certificate.issuer).toBe("Let's Encrypt");
+      expect(res.certificate.certificate).toBe("CERT_PEM");
+      expect(kms.encryptData).toHaveBeenCalledWith("tenant-1", "CERT_KEY");
+      expect(res.certificate.encryptedPrivateKey).toEqual({
+        ciphertext: "enc",
+        iv: "iv",
+        authTag: "tag",
+      });
+      // The http-01 token was written under the challenge dir.
+      expect(fs.promises.writeFile).toHaveBeenCalledWith(
+        expect.stringContaining("tok"),
+        "KEYAUTH",
+      );
+    });
+
+    it("omits the encrypted key when no tenant is supplied", async () => {
+      process.env.TLS_AUTO_PROVISION = "true";
+
       const res = await svc.provisionTLSCertificate("x.com");
 
-      expect(res.certificate.domain).toBe("x.com");
-      expect(res.certificate.issuer).toBe("Let's Encrypt (simulated)");
-      const lifetimeMs =
-        new Date(res.certificate.expiresAt) - new Date(res.certificate.issuedAt);
-      expect(Math.round(lifetimeMs / 86400000)).toBe(90);
+      expect(res.success).toBe(true);
+      expect(res.certificate.encryptedPrivateKey).toBeNull();
+      expect(kms.encryptData).not.toHaveBeenCalled();
     });
 
     it("declines when disabled", async () => {
@@ -406,15 +505,13 @@ describe("customDomainsService", () => {
       expect(res.reason).toBe("TLS auto-provisioning disabled");
     });
 
-    it("degrades gracefully instead of throwing if provisioning fails", async () => {
+    it("degrades gracefully instead of throwing if issuance fails", async () => {
       process.env.TLS_AUTO_PROVISION = "true";
-      logger.info.mockImplementationOnce(() => {
-        throw new Error("logging backend unavailable");
-      });
+      acme.crypto.createPrivateKey.mockRejectedValueOnce(new Error("acme down"));
 
       const res = await svc.provisionTLSCertificate("x.com");
 
-      expect(res).toEqual({ success: false, reason: "logging backend unavailable" });
+      expect(res).toEqual({ success: false, reason: "acme down" });
     });
     it("reports status and constants", () => {
       process.env.DNS_CHECK_INTERVAL = "60";

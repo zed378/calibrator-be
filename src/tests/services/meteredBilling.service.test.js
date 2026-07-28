@@ -394,8 +394,9 @@ describe("meteredBillingService", () => {
     // persistUsage is deliberately not awaited by trackUsage; let its microtasks run.
     const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-    it("should upsert a UsageMetric row for the current aggregation period", async () => {
-      const record = { count: 4, save: jest.fn() };
+    it("should seed a newly created bucket with exactly the tracked amount (no double count)", async () => {
+      const record = { count: 3, increment: jest.fn().mockResolvedValue() };
+      // created === true: the row was inserted with `defaults.count = amount`.
       UsageMetric.findOrCreate.mockResolvedValue([record, true]);
 
       await trackUsage("tenant-1", "api_calls", 3);
@@ -414,14 +415,29 @@ describe("meteredBillingService", () => {
           count: 3,
         },
       });
-      // Existing row: the amount is added on top and saved.
-      expect(record.count).toBe(7);
-      expect(record.save).toHaveBeenCalled();
+      // Fresh row already carries count:3 — it must NOT be incremented again,
+      // otherwise the first unit of every bucket is double-counted.
+      expect(record.increment).not.toHaveBeenCalled();
+    });
+
+    it("should atomically add to an already-existing bucket", async () => {
+      const record = { count: 4, increment: jest.fn().mockResolvedValue() };
+      // created === false: the bucket already existed for this period.
+      UsageMetric.findOrCreate.mockResolvedValue([record, false]);
+
+      await trackUsage("tenant-1", "api_calls", 3);
+      await flush();
+
+      // Accumulate atomically (count = count + amount) rather than read-modify-write.
+      expect(record.increment).toHaveBeenCalledWith("count", { by: 3 });
     });
 
     it("should truncate periodStart to the aggregation window", async () => {
       process.env.USAGE_AGGREGATION_HOURS = "6";
-      UsageMetric.findOrCreate.mockResolvedValue([{ count: 0, save: jest.fn() }, true]);
+      UsageMetric.findOrCreate.mockResolvedValue([
+        { count: 0, increment: jest.fn().mockResolvedValue() },
+        true,
+      ]);
 
       await trackUsage("tenant-1", "api_calls", 1);
       await flush();
@@ -431,16 +447,6 @@ describe("meteredBillingService", () => {
       expect(periodStart.getMinutes()).toBe(0);
       expect(periodStart.getSeconds()).toBe(0);
       expect(periodStart.getMilliseconds()).toBe(0);
-    });
-
-    it("should not save when the row carries no count", async () => {
-      const record = { save: jest.fn() };
-      UsageMetric.findOrCreate.mockResolvedValue([record, true]);
-
-      await trackUsage("tenant-1", "api_calls", 1);
-      await flush();
-
-      expect(record.save).not.toHaveBeenCalled();
     });
 
     it("should log — and swallow — a persistence failure", async () => {

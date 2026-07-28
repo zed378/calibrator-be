@@ -75,6 +75,17 @@ exports.auth = async (req, res, next) => {
     const decoded = verifyAccessToken(token);
 
     // ==========================================
+    // MFA-PENDING TOKEN IS NOT AN ACCESS TOKEN
+    // ==========================================
+    // When an MFA-enabled account passes the first factor, loginUser issues a
+    // short-lived token carrying `mfaRequired: true`. That token is ONLY valid
+    // for exchange at POST /auth/mfa/login after the second factor — it must
+    // never grant access to protected resources. Reject it here.
+    if (decoded.mfaRequired) {
+      return unauthorized(res, "MFA verification required");
+    }
+
+    // ==========================================
     // FETCH USER WITH ROLE AND TENANT
     // ==========================================
 

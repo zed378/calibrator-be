@@ -39,7 +39,6 @@ exports.emitNotification = async (data) => {
     const {
       channels,
       recipientEmail,
-      recipientPhone,
       recipientName,
       ...notifData
     } = data;
@@ -72,32 +71,25 @@ exports.emitNotification = async (data) => {
       console.warn("Socket.io emit failed (server might be booting):", socketErr.message);
     }
 
-    // --- Additional channels (email/sms), opt-in via data.channels ---
+    // --- Additional channel (email), opt-in via data.channels ---
     const requested = channels || notificationChannels.DEFAULT_CHANNELS;
-    if (requested.includes("email") || requested.includes("sms")) {
+    if (requested.includes("email")) {
       try {
         let email = recipientEmail;
-        let phone = recipientPhone;
         let name = recipientName;
         // Resolve recipient contact details from the target user if not supplied.
-        if (
-          notifData.userId &&
-          ((requested.includes("email") && !email) ||
-            (requested.includes("sms") && !phone))
-        ) {
+        if (notifData.userId && !email) {
           const u = await User.findByPk(notifData.userId, {
-            attributes: ["email", "firstName", "phone"],
+            attributes: ["email", "firstName"],
           });
           if (u) {
             email = email || u.email;
-            phone = phone || u.phone;
             name = name || u.firstName;
           }
         }
         await notificationChannels.dispatch(transformed, {
           channels: requested,
           recipientEmail: email,
-          recipientPhone: phone,
           recipientName: name,
         });
       } catch (chErr) {

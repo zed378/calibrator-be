@@ -1,228 +1,101 @@
 /**
- * Tests for tenantContext middleware
+ * Tests for tenantContext.middleware.
+ *
+ * The middleware's only job now is to publish the per-request tenant context
+ * into AsyncLocalStorage. Postgres RLS (and with it the per-request
+ * `set_config` GUC + wrapping transaction) has been removed: it was
+ * Postgres-only and fail-open. utils/tenantScope.util.js reads this context to
+ * enforce isolation in the ORM, deny-by-default, on every dialect.
  */
-jest.mock("../../config", () => ({
-  db: {
-    getDialect: jest.fn(),
-    transaction: jest.fn(),
-    query: jest.fn(),
-  },
-}));
 
-const { db } = require("../../config");
-const { tenantContextMiddleware, tenantStorage } = require("../../middlewares/tenantContext.middleware");
+const {
+  tenantStorage,
+  tenantContextMiddleware,
+} = require("../../middlewares/tenantContext.middleware");
 
-describe("tenantContext middleware", () => {
+describe("tenantContext.middleware", () => {
   let req, res, next;
 
   beforeEach(() => {
-    req = {
-      tenantId: "tenant-abc",
-      user: {
-        role: { name: "TENANT_ADMIN" },
-      },
-    };
-    res = {
-      on: jest.fn(),
-    };
+    req = { headers: {} };
+    res = {};
     next = jest.fn();
   });
 
-  afterEach(() => {
-    jest.clearAllMocks();
+  /** Capture the CLS context visible to downstream handlers. */
+  const contextSeenByNext = () => {
+    let seen;
+    next.mockImplementation(() => {
+      seen = tenantStorage.getStore();
+    });
+    tenantContextMiddleware(req, res, next);
+    return seen;
+  };
+
+  it("always calls next()", () => {
+    tenantContextMiddleware(req, res, next);
+    expect(next).toHaveBeenCalledTimes(1);
   });
 
-  it("should run AsyncLocalStorage with tenant context details", async () => {
-    db.getDialect.mockReturnValue("sqlite");
-    
-    let contextValue;
-    next.mockImplementation(() => {
-      contextValue = tenantStorage.getStore();
-    });
-
-    await tenantContextMiddleware(req, res, next);
-
-    expect(next).toHaveBeenCalled();
-    expect(contextValue).toEqual({
+  it("publishes the request tenantId to downstream handlers", () => {
+    req.tenantId = "tenant-abc";
+    expect(contextSeenByNext()).toEqual({
       tenantId: "tenant-abc",
       isSuperAdmin: false,
       isSystemTask: false,
     });
   });
 
-  it("should detect super admin status in context", async () => {
-    db.getDialect.mockReturnValue("sqlite");
-    req.user.role.name = "SUPER_ADMIN";
-    
-    let contextValue;
-    next.mockImplementation(() => {
-      contextValue = tenantStorage.getStore();
-    });
-
-    await tenantContextMiddleware(req, res, next);
-
-    expect(contextValue.isSuperAdmin).toBe(true);
+  it("marks SUPERADMIN as cross-tenant", () => {
+    req.tenantId = "tenant-abc";
+    req.user = { role: { name: "SUPERADMIN" } };
+    expect(contextSeenByNext()).toMatchObject({ isSuperAdmin: true });
   });
 
-  it("should call next() directly for non-postgres dialects (mysql)", async () => {
-    db.getDialect.mockReturnValue("mysql");
-
-    await tenantContextMiddleware(req, res, next);
-
-    expect(next).toHaveBeenCalled();
+  it("also accepts the SUPER_ADMIN spelling", () => {
+    req.user = { role: { name: "SUPER_ADMIN" } };
+    expect(contextSeenByNext()).toMatchObject({ isSuperAdmin: true });
   });
 
-  it("should setup local transaction and query session variables in postgres dialect", async () => {
-    db.getDialect.mockReturnValue("postgres");
-    
-    const spyTransaction = jest.spyOn(db, "transaction").mockImplementation(async (callback) => {
-      await callback("dummy-transaction-object");
+  it("treats any other role as tenant-bound", () => {
+    req.tenantId = "t1";
+    req.user = { role: { name: "TECHNICIAN" } };
+    expect(contextSeenByNext()).toMatchObject({
+      isSuperAdmin: false,
+      tenantId: "t1",
     });
-    const spyQuery = jest.spyOn(db, "query").mockResolvedValue([]);
-
-    // We wait for next to be called because tenantContextMiddleware runs asynchronously
-    // inside AsyncLocalStorage.run without returning the promise to the caller.
-    await new Promise((resolve) => {
-      next.mockImplementation(() => {
-        resolve();
-      });
-
-      tenantContextMiddleware(req, res, next);
-
-      // Trigger the response finish callback to resolve the transaction promise
-      setTimeout(() => {
-        const finishCall = res.on.mock.calls.find((c) => c[0] === "finish");
-        if (finishCall && typeof finishCall[1] === "function") {
-          finishCall[1]();
-        }
-      }, 5);
-    });
-
-    expect(spyTransaction).toHaveBeenCalled();
-    expect(spyQuery).toHaveBeenCalledWith(
-      expect.stringContaining("set_config('app.current_tenant'"),
-      expect.objectContaining({ bind: ["tenant-abc"] })
-    );
-    expect(spyQuery).toHaveBeenCalledWith(
-      expect.stringContaining("set_config('app.enable_rls'"),
-      expect.any(Object)
-    );
-    expect(next).toHaveBeenCalled();
   });
 
-  it("should pass SUPER_ADMIN value when user is super admin in postgres dialect", async () => {
-    db.getDialect.mockReturnValue("postgres");
-    req.user.role.name = "SUPER_ADMIN";
-
-    const spyQuery = jest.spyOn(db, "query").mockResolvedValue([]);
-    jest.spyOn(db, "transaction").mockImplementation(async (callback) => {
-      await callback("dummy-transaction-object");
-    });
-
-    await new Promise((resolve) => {
-      next.mockImplementation(() => {
-        resolve();
-      });
-
-      tenantContextMiddleware(req, res, next);
-
-      setTimeout(() => {
-        const finishCall = res.on.mock.calls.find((c) => c[0] === "finish");
-        if (finishCall && typeof finishCall[1] === "function") {
-          finishCall[1]();
-        }
-      }, 5);
-    });
-
-    expect(spyQuery).toHaveBeenCalledWith(
-      expect.stringContaining("set_config('app.current_tenant'"),
-      expect.objectContaining({ bind: ["SUPER_ADMIN"] })
-    );
+  it("nulls the tenantId when the request has none", () => {
+    // tenantScope resolves this to DENY for a non-super-admin — an
+    // authenticated principal without a tenant must read nothing.
+    expect(contextSeenByNext()).toMatchObject({ tenantId: null });
   });
 
-  it("should pass empty string for tenant when tenantId is null in postgres dialect", async () => {
-    db.getDialect.mockReturnValue("postgres");
-    req.tenantId = null;
-
-    const spyQuery = jest.spyOn(db, "query").mockResolvedValue([]);
-    jest.spyOn(db, "transaction").mockImplementation(async (callback) => {
-      await callback("dummy-transaction-object");
-    });
-
-    await new Promise((resolve) => {
-      next.mockImplementation(() => {
-        resolve();
-      });
-
-      tenantContextMiddleware(req, res, next);
-
-      setTimeout(() => {
-        const finishCall = res.on.mock.calls.find((c) => c[0] === "finish");
-        if (finishCall && typeof finishCall[1] === "function") {
-          finishCall[1]();
-        }
-      }, 5);
-    });
-
-    expect(spyQuery).toHaveBeenCalledWith(
-      expect.stringContaining("set_config('app.current_tenant'"),
-      expect.objectContaining({ bind: [""] })
-    );
+  it("tolerates a user without a role object", () => {
+    req.user = {};
+    expect(contextSeenByNext()).toMatchObject({ isSuperAdmin: false });
   });
 
-  it("should call next(err) when transaction throws and headers not sent", async () => {
-    db.getDialect.mockReturnValue("postgres");
-
-    const testError = new Error("Transaction failed");
-    jest.spyOn(db, "transaction").mockRejectedValue(testError);
-    const spyQuery = jest.spyOn(db, "query").mockResolvedValue([]);
-
-    await tenantContextMiddleware(req, res, next);
-
-    expect(next).toHaveBeenCalledWith(testError);
-    expect(spyQuery).not.toHaveBeenCalled();
-  });
-
-  it("should skip next(err) when headers are already sent", async () => {
-    db.getDialect.mockReturnValue("postgres");
-
-    const testError = new Error("Transaction failed");
-    jest.spyOn(db, "transaction").mockRejectedValue(testError);
-
-    const resHeadersSent = {
-      on: jest.fn(),
-      headersSent: true,
-    };
-
-    await tenantContextMiddleware(req, resHeadersSent, next);
-
-    expect(next).not.toHaveBeenCalled();
-  });
-
-  it("should cover res.on finish callback path in postgres dialect", async () => {
-    db.getDialect.mockReturnValue("postgres");
-
-    let resolveFinish = null;
-    const finishPromise = new Promise((resolve) => {
-      resolveFinish = resolve;
-    });
-
-    jest.spyOn(db, "transaction").mockImplementation(async (callback) => {
-      await callback("dummy-transaction-object");
-    });
-    jest.spyOn(db, "query").mockResolvedValue([]);
-
-    // Store original next implementation, call middleware then trigger finish
+  it("does not leak context outside the request scope", () => {
+    req.tenantId = "tenant-abc";
     tenantContextMiddleware(req, res, next);
+    expect(tenantStorage.getStore()).toBeUndefined();
+  });
 
-    // The res.on('finish') handler was registered; find and call it directly
-    // to cover the () => resolve() arrow function and its body resolve()
-    const finishHandler = res.on.mock.calls.find((c) => c[0] === "finish");
-    if (finishHandler && typeof finishHandler[1] === "function") {
-      finishHandler[1]();
-    }
+  it("isolates concurrent requests from each other", async () => {
+    const run = (tenantId) =>
+      new Promise((resolve) => {
+        tenantContextMiddleware({ tenantId, headers: {} }, {}, async () => {
+          // Yield so the two requests interleave.
+          await new Promise((r) => setImmediate(r));
+          resolve(tenantStorage.getStore().tenantId);
+        });
+      });
 
-    // Give the event loop a tick for any async cleanup
-    await new Promise((r) => setTimeout(r, 1));
+    await expect(Promise.all([run("t1"), run("t2")])).resolves.toEqual([
+      "t1",
+      "t2",
+    ]);
   });
 });

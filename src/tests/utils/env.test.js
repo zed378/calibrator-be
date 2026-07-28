@@ -32,12 +32,15 @@ describe("env.util", () => {
     
     process.pkg = {};
     const originalExecPath = process.execPath;
-    process.execPath = "c:\\Program Files\\app\\exec.exe";
-    
+    // Platform-native separators so the assertion holds on win32 and posix
+    // alike (the util loads .env from dirname(execPath)).
+    const fakeExec = path.join(path.sep, "opt", "app", "exec.exe");
+    process.execPath = fakeExec;
+
     try {
       require("../../utils/env.util");
       expect(dotenvSpy).toHaveBeenCalledWith({
-        path: path.join("c:\\Program Files\\app", ".env"),
+        path: path.join(path.dirname(fakeExec), ".env"),
         quiet: true
       });
     } finally {

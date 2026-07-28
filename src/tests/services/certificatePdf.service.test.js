@@ -473,6 +473,7 @@ describe("certificatePdf.service", () => {
         device: { name: "Micrometer", serialNumber: "SN123" },
         signedByUser: { firstName: "Bob", lastName: "Admin" },
         signedAt: new Date("2025-06-01"),
+        filePath: "/uploads/certificates/CERT-001.pdf",
       };
       Certificate.findOne.mockResolvedValueOnce(mockCert);
 
@@ -483,6 +484,7 @@ describe("certificatePdf.service", () => {
       expect(result.data.valid).toBe(true);
       expect(result.data.status).toBe("signed");
       expect(result.data.integrityHash).toBe("mock-hash-abc123");
+      expect(result.data.documentUrl).toBe("/uploads/certificates/CERT-001.pdf");
     });
 
     it("should return not found for unknown certificate number", async () => {

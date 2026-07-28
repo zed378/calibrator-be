@@ -104,6 +104,17 @@ describe("auth middleware", () => {
       expect(unauthorized).toHaveBeenCalled();
     });
 
+    it("should reject an MFA-pending token (mfaRequired) as an access token", async () => {
+      req.headers.authorization = "Bearer mfa-pending-token";
+      verifyAccessToken.mockReturnValue({ id: "user-123", mfaRequired: true });
+
+      await auth(req, res, next);
+
+      expect(unauthorized).toHaveBeenCalledWith(res, "MFA verification required");
+      // Must short-circuit before loading the user / granting access.
+      expect(authService.getAuthUserWithTenant).not.toHaveBeenCalled();
+    });
+
     it("should reject banned user", async () => {
       req.headers.authorization = "Bearer valid-token";
       verifyAccessToken.mockReturnValue({ id: "user-123" });

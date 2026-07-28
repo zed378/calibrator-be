@@ -288,7 +288,6 @@ const pool = new CircuitBreakerPool();
 exports.getBreaker = (service) => {
   const configs = {
     email: { threshold: 3, timeout: 60000, name: "email_service" },
-    sms: { threshold: 3, timeout: 30000, name: "sms_service" },
     storage: { threshold: 5, timeout: 30000, name: "storage_service" },
     sso: { threshold: 3, timeout: 60000, name: "sso_service" },
     default: { threshold: 5, timeout: 30000, name: "default" },

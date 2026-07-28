@@ -54,7 +54,7 @@ const { Sequelize, DataTypes, Op } = require("sequelize");
 // This ensures all queries use the configured pool, SSL, timezone,
 // retry logic, and logging settings instead of Sequelize defaults.
 const { db } = require("../config");
-const { tenantStorage } = require("../middlewares/tenantContext.middleware");
+// (tenant context is read inside utils/tenantScope.util.js)
 
 const models = {};
 
@@ -92,121 +92,22 @@ db.Op = Op;
 // from the AsyncLocalStorage context (set by auth middleware).
 // This acts as a defense-in-depth layer across the entire ORM.
 
-function enforceTenantWhere(options, model) {
-  const context = tenantStorage.getStore();
-  if (!context || context.isSuperAdmin || !context.tenantId) return;
-
-  const tenantKey = model.rawAttributes.tenantId
-    ? "tenantId"
-    : model.rawAttributes.tenant_id
-      ? "tenant_id"
-      : null;
-  if (tenantKey) {
-    if (!options.where) options.where = {};
-    // Prevent overriding if already explicitly queried differently?
-    // No, we FORCE the isolation. If they query for a different tenant, it will yield nothing.
-    options.where = { ...options.where, [tenantKey]: context.tenantId };
-  }
-}
-
-function enforceTenantAssignment(instance, model) {
-  const context = tenantStorage.getStore();
-  if (!context || context.isSuperAdmin || !context.tenantId) return;
-
-  const tenantKey = model.rawAttributes.tenantId
-    ? "tenantId"
-    : model.rawAttributes.tenant_id
-      ? "tenant_id"
-      : null;
-  if (tenantKey) {
-    instance[tenantKey] = context.tenantId;
-  }
-}
-
-db.addHook("beforeFind", function (options) {
-  enforceTenantWhere(options, this);
-});
-db.addHook("beforeCount", function (options) {
-  enforceTenantWhere(options, this);
-});
-db.addHook("beforeUpdate", function (instance, options) {
-  enforceTenantAssignment(instance, this);
-});
-db.addHook("beforeCreate", function (instance, options) {
-  enforceTenantAssignment(instance, this);
-});
-db.addHook("beforeDestroy", function (instance, options) {
-  const context = tenantStorage.getStore();
-  if (!context || context.isSuperAdmin || !context.tenantId) return;
-  const tenantKey = this.rawAttributes.tenantId
-    ? "tenantId"
-    : this.rawAttributes.tenant_id
-      ? "tenant_id"
-      : null;
-  if (
-    tenantKey &&
-    instance[tenantKey] &&
-    String(instance[tenantKey]) !== String(context.tenantId)
-  ) {
-    throw new Error(
-      "Security Violation: Attempted to destroy cross-tenant record",
-    );
-  }
-});
-db.addHook("beforeBulkUpdate", function (options) {
-  enforceTenantWhere(options, this);
-});
-db.addHook("beforeBulkDestroy", function (options) {
-  enforceTenantWhere(options, this);
-});
+// Isolation now lives in utils/tenantScope.util.js — unit-tested and
+// DENY BY DEFAULT. The previous inline hooks returned early whenever the
+// request had no tenantId, i.e. applied NO filter, so an authenticated
+// principal without a tenant read every tenant's rows (the same fail-open
+// hole the Postgres RLS policy had via its `app.current_tenant = ''` branch).
+// tenantScope resolves that case to a predicate that cannot match.
+require("../utils/tenantScope.util").register(db);
 
 /**
  * Initializes native Postgres Row-Level Security (RLS) on all models with a tenantId.
  * This should be called after db.sync() in index.js.
  */
-db.setupPostgresRLS = async function () {
-  const dialect = db.getDialect();
-  if (dialect !== "postgres") {
-    console.warn(`RLS not supported on dialect: ${dialect}`);
-    return;
-  }
-
-  for (const modelName in models) {
-    const model = models[modelName];
-    let tenantKey = null;
-    if (model.rawAttributes.tenantId) {
-      tenantKey = model.rawAttributes.tenantId.field || "tenantId";
-    } else if (model.rawAttributes.tenant_id) {
-      tenantKey = model.rawAttributes.tenant_id.field || "tenant_id";
-    }
-
-    if (tenantKey) {
-      const tableName = model.tableName;
-      try {
-        await db.query(`ALTER TABLE "${tableName}" ENABLE ROW LEVEL SECURITY;`);
-        // Drop existing policy if it exists to recreate it
-        await db.query(
-          `DROP POLICY IF EXISTS tenant_isolation_policy ON "${tableName}";`,
-        );
-        // Create policy to isolate rows by tenant_id, bypassing for SUPER_ADMIN or when no tenant is set
-        await db.query(`
-          CREATE POLICY tenant_isolation_policy ON "${tableName}"
-          USING (
-            current_setting('app.current_tenant', true) = '' OR 
-            current_setting('app.current_tenant', true) = 'SUPER_ADMIN' OR
-            "${tenantKey}"::text = current_setting('app.current_tenant', true)
-          );
-        `);
-      } catch (err) {
-        console.error(
-          `Failed to setup RLS for table ${tableName}:`,
-          err.message,
-        );
-      }
-    }
-  }
-  console.log("Postgres RLS policies applied to tenant-aware tables.");
-};
+// Postgres ROW LEVEL SECURITY has been removed. It only worked on Postgres
+// (blocking multi-engine support) and its policy matched every row when
+// app.current_tenant was empty. Isolation is enforced above by
+// utils/tenantScope.util.js, deny-by-default, on every dialect.
 
 // Backward compatibility: export both singular and plural names
 module.exports = Object.assign(db, {
@@ -307,6 +208,20 @@ module.exports = Object.assign(db, {
   IotReadings: models.IotReading,
   ESignatureRecord: models.ESignatureRecord,
   ESignatureRecords: models.ESignatureRecord,
+  // e-Signature workflow module (distinct from the certificate compliance log
+  // above). These four were referenced by eSignature.service.js but never
+  // existed, so every /esignature workflow route 500'd.
+  TenantKey: models.TenantKey,
+  TenantKeys: models.TenantKey,
+  SignatureWorkflow: models.SignatureWorkflow,
+  SignatureWorkflows: models.SignatureWorkflow,
+  SignatureWorkflowStep: models.SignatureWorkflowStep,
+  SignatureWorkflowSteps: models.SignatureWorkflowStep,
+  SignatureRecord: models.SignatureRecord,
+  SignatureRecords: models.SignatureRecord,
+  // RAG knowledge base (ai.service retrieval/ingestion).
+  DocumentChunk: models.DocumentChunk,
+  DocumentChunks: models.DocumentChunk,
   ConsentRecord: models.ConsentRecord,
   ConsentRecords: models.ConsentRecord,
   DsarRequest: models.DsarRequest,

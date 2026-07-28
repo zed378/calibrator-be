@@ -63,7 +63,7 @@ const billingGuard = [auth, rbac(["TENANT_ADMIN", "BILLING_ADMIN"])];
  *       401:
  *         description: Unauthorized
  */
-router.get("/usage", auth, getUsageMetrics);
+router.get("/usage", ...billingGuard, getUsageMetrics);
 
 /**
  * @swagger
@@ -103,7 +103,7 @@ router.get("/usage", auth, getUsageMetrics);
  */
 router.get(
   "/history",
-  auth,
+  ...billingGuard,
   meteredValidator.validateQuery(billingHistoryValidator),
   getBillingHistory,
 );
@@ -155,7 +155,7 @@ router.get(
  */
 router.post(
   "/estimate",
-  auth,
+  ...billingGuard,
   meteredValidator.validateBody(estimateCostValidator),
   estimateCost,
 );
@@ -186,7 +186,7 @@ router.post(
  *       401:
  *         description: Unauthorized
  */
-router.get("/plan", auth, getPlanDetails);
+router.get("/plan", ...billingGuard, getPlanDetails);
 
 /**
  * @swagger
@@ -212,7 +212,7 @@ router.get("/plan", auth, getPlanDetails);
  *       401:
  *         description: Unauthorized
  */
-router.get("/alerts", auth, getUsageAlerts);
+router.get("/alerts", ...billingGuard, getUsageAlerts);
 
 /**
  * @swagger
@@ -248,7 +248,7 @@ router.get("/alerts", auth, getUsageAlerts);
  *                 type: array
  *                 items:
  *                   type: string
- *                   enum: [email, sms, webhook]
+ *                   enum: [email, webhook]
  *                 default: [email]
  *               isEnabled:
  *                 type: boolean
@@ -263,7 +263,7 @@ router.get("/alerts", auth, getUsageAlerts);
  */
 router.post(
   "/alerts",
-  auth,
+  ...billingGuard,
   meteredValidator.validateBody(createAlertValidator),
   createUsageAlert,
 );
@@ -294,7 +294,7 @@ router.post(
  */
 router.delete(
   "/alerts/:alertId",
-  auth,
+  ...billingGuard,
   validateUuid("alertId"),
   deleteUsageAlert,
 );
@@ -338,7 +338,7 @@ router.delete(
  */
 router.get(
   "/analytics",
-  auth,
+  ...billingGuard,
   meteredValidator.validateQuery(getAnalyticsValidator),
   getAnalytics,
 );

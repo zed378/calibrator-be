@@ -54,6 +54,10 @@ const defineModel = (db, DataTypes) => {
     'oidc_client_secret',
     'stripe_secret_key',
     'webhook_signing_secret',
+    // A tenant's own object-storage keys (bring-your-own bucket). These grant
+    // direct access to that tenant's files, so they are envelope-encrypted at
+    // rest exactly like the other secrets above.
+    'storage_credentials',
   ];
 
   /**

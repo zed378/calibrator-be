@@ -23,6 +23,7 @@ jest.mock("../../models", () => {
     AuditLog: { destroy: jest.fn() },
     Notification: { destroy: jest.fn() },
     Session: { destroy: jest.fn() },
+    Tenant: { findAll: jest.fn() },
     TenantSettings: {
       findOne: jest.fn(),
       findAll: jest.fn(),
@@ -35,7 +36,7 @@ jest.mock("../../models", () => {
 });
 
 const dataRetention = require("../../services/dataRetention.service");
-const { AuditLog, Notification, Session, TenantSettings, User, Audit_log } = require("../../models");
+const { AuditLog, Notification, Session, Tenant, TenantSettings, User, Audit_log } = require("../../models");
 
 describe("dataRetention.service", () => {
   beforeEach(() => jest.clearAllMocks());
@@ -257,6 +258,47 @@ describe("dataRetention.service", () => {
       expect(passed).not.toHaveProperty("id");
       expect(passed).not.toHaveProperty("createdAt");
       expect(result.anonymized).toBe(1);
+    });
+  });
+
+  describe("runRetentionSweep", () => {
+    afterEach(() => jest.restoreAllMocks());
+
+    it("aggregates purged counts and skips across all tenants", async () => {
+      Tenant.findAll.mockResolvedValue([{ id: "t1" }, { id: "t2" }]);
+      const spy = jest
+        .spyOn(dataRetention, "purgeExpiredRecords")
+        .mockResolvedValueOnce({ purged: { audit_logs: 5, sessions: 2 }, skipped: false })
+        .mockResolvedValueOnce({ skipped: true, reason: "legal_hold" });
+
+      const summary = await dataRetention.runRetentionSweep();
+
+      expect(spy).toHaveBeenCalledWith("t1");
+      expect(spy).toHaveBeenCalledWith("t2");
+      expect(summary).toEqual({ tenants: 2, purged: 7, skipped: 1, errors: 0 });
+    });
+
+    it("treats a missing purged map as zero", async () => {
+      Tenant.findAll.mockResolvedValue([{ id: "t1" }]);
+      jest
+        .spyOn(dataRetention, "purgeExpiredRecords")
+        .mockResolvedValue({ skipped: false });
+
+      const summary = await dataRetention.runRetentionSweep();
+
+      expect(summary).toEqual({ tenants: 1, purged: 0, skipped: 0, errors: 0 });
+    });
+
+    it("counts and logs a per-tenant failure without aborting the sweep", async () => {
+      Tenant.findAll.mockResolvedValue([{ id: "t1" }, { id: "t2" }]);
+      jest
+        .spyOn(dataRetention, "purgeExpiredRecords")
+        .mockRejectedValueOnce(new Error("boom"))
+        .mockResolvedValueOnce({ purged: { sessions: 3 }, skipped: false });
+
+      const summary = await dataRetention.runRetentionSweep();
+
+      expect(summary).toEqual({ tenants: 2, purged: 3, skipped: 0, errors: 1 });
     });
   });
 });

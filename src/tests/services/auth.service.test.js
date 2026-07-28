@@ -640,7 +640,7 @@ describe("auth.service", () => {
       );
     });
 
-    it("should reject when user not found", async () => {
+    it("should reject an unknown account with the same generic error as a bad OTP (no enumeration)", async () => {
       Users.findOne.mockResolvedValue(null);
 
       await expect(
@@ -649,7 +649,7 @@ describe("auth.service", () => {
           otp: "123456",
           newPassword: "newpassword123",
         }),
-      ).rejects.toThrow("Account not found");
+      ).rejects.toThrow("Invalid OTP");
     });
 
     it("should reject invalid OTP", async () => {

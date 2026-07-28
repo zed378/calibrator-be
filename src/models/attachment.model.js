@@ -42,10 +42,20 @@ const defineModel = (db, DataTypes) => {
         allowNull: false,
       },
       // Folder (relative to the storage root) the file lives in.
+      // LEGACY addressing: retained for rows uploaded before the pluggable
+      // storage layer, and as the source path for the migration tool.
       folder: {
         type: DataTypes.STRING(255),
         allowNull: false,
         defaultValue: "uploads/attachments",
+      },
+      // Pluggable-storage key: `t/<tenantId>/<domain>/<name>`. NULL for rows
+      // that still live on the legacy folder/fileName disk path and have not
+      // yet been migrated into the configured storage backend.
+      storageKey: {
+        type: DataTypes.STRING(1024),
+        allowNull: true,
+        defaultValue: null,
       },
       mimeType: {
         type: DataTypes.STRING(150),

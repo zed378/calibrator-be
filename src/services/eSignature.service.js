@@ -27,6 +27,17 @@ const REQUIRE_REAUTHENTICATION =
   process.env.REQUIRE_REAUTHENTICATION !== "false";
 const SIGNATURE_TTL_MS = parseInt(process.env.SIGNATURE_TTL_MS) || 300000; // 5 min
 
+// AES-256 key for encrypting signer private keys at rest. Required — no
+// hardcoded default. Derived via SHA-256 so any sufficiently-random secret
+// yields a valid 32-byte key.
+const ENCRYPT_KEY_RAW = process.env.ENCRYPT_KEY;
+/* istanbul ignore next -- fail-fast startup guard: private keys must never be
+   encrypted under a default key baked into source. */
+if (!ENCRYPT_KEY_RAW) {
+  throw new Error("ENCRYPT_KEY is required (no insecure default)");
+}
+const ENCRYPT_KEY = crypto.createHash("sha256").update(ENCRYPT_KEY_RAW).digest();
+
 // ==========================================
 // KEY PAIR MANAGEMENT
 // ==========================================
@@ -89,11 +100,8 @@ exports.generateKeyPair = async (tenantId) => {
  * Encrypt private key for storage
  */
 function encryptPrivateKey(privateKey) {
-  const encryptKey = Buffer.from(
-    process.env.ENCRYPT_KEY || "default-encrypt-key-32-bytes!!!!",
-  ).slice(0, 32);
   const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv("aes-256-cbc", encryptKey, iv);
+  const cipher = crypto.createCipheriv("aes-256-cbc", ENCRYPT_KEY, iv);
 
   let encrypted = cipher.update(privateKey, "utf8", "hex");
   encrypted += cipher.final("hex");
@@ -108,18 +116,69 @@ function encryptPrivateKey(privateKey) {
    never called anywhere in the codebase (only its counterpart
    encryptPrivateKey is used), so no test can invoke it. */
 function decryptPrivateKey(encryptedKey) {
-  const encryptKey = Buffer.from(
-    process.env.ENCRYPT_KEY || "default-encrypt-key-32-bytes!!!!",
-  ).slice(0, 32);
   const [ivHex, encrypted] = encryptedKey.split(":");
   const iv = Buffer.from(ivHex, "hex");
-  const decipher = crypto.createDecipheriv("aes-256-cbc", encryptKey, iv);
+  const decipher = crypto.createDecipheriv("aes-256-cbc", ENCRYPT_KEY, iv);
 
   let decrypted = decipher.update(encrypted, "hex", "utf8");
   decrypted += decipher.final("utf8");
 
   return decrypted;
 }
+
+/**
+ * List a tenant's key pairs. The private key is excluded by the model's default
+ * scope, so only public metadata is returned.
+ * @param {string} tenantId
+ * @returns {Promise<Array>}
+ */
+exports.getKeyPairs = async (tenantId) => {
+  try {
+    const { TenantKey } = require("../models");
+    const keys = await TenantKey.findAll({
+      where: { tenantId },
+      order: [["createdAt", "DESC"]],
+    });
+    return keys.map((k) => ({
+      id: k.id,
+      keyId: k.keyId,
+      keyType: k.keyType,
+      algorithm: k.algorithm,
+      publicKey: k.publicKey,
+      createdAt: k.createdAt,
+    }));
+  } catch (err) {
+    logger.error("Failed to list key pairs", { tenantId, error: err.message });
+    throw new AppError(500, "Failed to list key pairs");
+  }
+};
+
+/**
+ * Soft-delete a tenant's key pair.
+ * @param {string} keyPairId
+ * @param {string} tenantId
+ */
+exports.deleteKeyPair = async (keyPairId, tenantId) => {
+  try {
+    const { TenantKey } = require("../models");
+    const key = await TenantKey.findOne({
+      where: { id: keyPairId, tenantId },
+    });
+    if (!key) {
+      throw new AppError(404, "Key pair not found");
+    }
+    await key.destroy(); // paranoid soft delete
+    logger.info("E-signature key pair deleted", { tenantId, keyPairId });
+    return { success: true };
+  } catch (err) {
+    if (err.status) throw err;
+    logger.error("Failed to delete key pair", {
+      keyPairId,
+      error: err.message,
+    });
+    throw new AppError(500, "Failed to delete key pair");
+  }
+};
 
 // ==========================================
 // SIGNATURE WORKFLOW
@@ -164,6 +223,9 @@ exports.createSignatureWorkflow = async (tenantId, data) => {
     for (let i = 0; i < signers.length; i++) {
       const signer = signers[i];
       const step = await SignatureWorkflowStep.create({
+        // tenantId is required for isolation AND is read back by signDocument
+        // (step.tenantId) when it writes the SignatureRecord/AuditLog rows.
+        tenantId,
         workflowId: workflow.id,
         stepNumber: i + 1,
         signerId: signer.userId,
@@ -530,6 +592,141 @@ exports.getWorkflow = async (workflowId) => {
       error: err.message,
     });
     return null;
+  }
+};
+
+/**
+ * List a tenant's signature workflows, optionally filtered by status.
+ * @param {string} tenantId
+ * @param {Object} filters
+ * @param {string} [filters.status]
+ * @returns {Promise<Array>}
+ */
+exports.getWorkflows = async (tenantId, filters = {}) => {
+  try {
+    const { SignatureWorkflow } = require("../models");
+    const where = { tenantId };
+    if (filters.status) {
+      where.status = filters.status;
+    }
+    return await SignatureWorkflow.findAll({
+      where,
+      order: [["createdAt", "DESC"]],
+    });
+  } catch (err) {
+    logger.error("Failed to list workflows", {
+      tenantId,
+      error: err.message,
+    });
+    throw new AppError(500, "Failed to list workflows");
+  }
+};
+
+/**
+ * Update a workflow's editable metadata (subject/message/expiry). A completed or
+ * cancelled workflow is immutable.
+ * @param {string} workflowId
+ * @param {string} tenantId
+ * @param {Object} updates
+ * @returns {Promise<Object>} the updated workflow
+ */
+exports.updateWorkflow = async (workflowId, tenantId, updates = {}) => {
+  try {
+    const { SignatureWorkflow } = require("../models");
+    const workflow = await SignatureWorkflow.findOne({
+      where: { id: workflowId, tenantId },
+    });
+    if (!workflow) {
+      throw new AppError(404, "Workflow not found");
+    }
+    if (workflow.status === "completed" || workflow.status === "cancelled") {
+      throw new AppError(400, `Cannot update a ${workflow.status} workflow`);
+    }
+    // Only a safe subset of fields is mutable — the client cannot force a status
+    // (e.g. "completed") or re-point the document.
+    const allowed = ["subject", "message", "expiresAt"];
+    const patch = {};
+    for (const field of allowed) {
+      if (updates[field] !== undefined) {
+        patch[field] = updates[field];
+      }
+    }
+    await workflow.update(patch);
+    return workflow;
+  } catch (err) {
+    if (err.status) throw err;
+    logger.error("Failed to update workflow", {
+      workflowId,
+      error: err.message,
+    });
+    throw new AppError(500, "Failed to update workflow");
+  }
+};
+
+/**
+ * Soft-delete a workflow.
+ * @param {string} workflowId
+ * @param {string} tenantId
+ */
+exports.deleteWorkflow = async (workflowId, tenantId) => {
+  try {
+    const { SignatureWorkflow } = require("../models");
+    const workflow = await SignatureWorkflow.findOne({
+      where: { id: workflowId, tenantId },
+    });
+    if (!workflow) {
+      throw new AppError(404, "Workflow not found");
+    }
+    await workflow.destroy(); // paranoid soft delete
+    logger.info("Signature workflow deleted", { tenantId, workflowId });
+    return { success: true };
+  } catch (err) {
+    if (err.status) throw err;
+    logger.error("Failed to delete workflow", {
+      workflowId,
+      error: err.message,
+    });
+    throw new AppError(500, "Failed to delete workflow");
+  }
+};
+
+/**
+ * Signature history / audit trail for a tenant, optionally filtered by signer
+ * and signed-at date range.
+ * @param {string} tenantId
+ * @param {Object} filters
+ * @param {string} [filters.userId]
+ * @param {string} [filters.startDate]
+ * @param {string} [filters.endDate]
+ * @returns {Promise<Array>}
+ */
+exports.getSignatureHistory = async (tenantId, filters = {}) => {
+  try {
+    const { SignatureRecord } = require("../models");
+    const { Op } = require("sequelize");
+    const where = { tenantId };
+    if (filters.userId) {
+      where.userId = filters.userId;
+    }
+    if (filters.startDate || filters.endDate) {
+      where.signedAt = {};
+      if (filters.startDate) {
+        where.signedAt[Op.gte] = new Date(filters.startDate);
+      }
+      if (filters.endDate) {
+        where.signedAt[Op.lte] = new Date(filters.endDate);
+      }
+    }
+    return await SignatureRecord.findAll({
+      where,
+      order: [["signedAt", "DESC"]],
+    });
+  } catch (err) {
+    logger.error("Failed to get signature history", {
+      tenantId,
+      error: err.message,
+    });
+    throw new AppError(500, "Failed to get signature history");
   }
 };
 

@@ -30,11 +30,15 @@ describe("appPath util", () => {
     jest.resetModules();
     process.pkg = {};
     const originalExecPath = process.execPath;
-    process.execPath = "c:\\Program Files\\app\\exec.exe";
+    // Build the fake exec path with the platform's own separators so the
+    // assertion holds on both win32 and posix (the util joins
+    // dirname(execPath) + segments).
+    const fakeExec = path.join(path.sep, "opt", "app", "exec.exe");
+    process.execPath = fakeExec;
     try {
       const appPathPackaged = require("../../utils/appPath.util");
       const result = appPathPackaged("uploads");
-      expect(result).toBe(path.join("c:\\Program Files\\app", "uploads"));
+      expect(result).toBe(path.join(path.dirname(fakeExec), "uploads"));
     } finally {
       delete process.pkg;
       process.execPath = originalExecPath;

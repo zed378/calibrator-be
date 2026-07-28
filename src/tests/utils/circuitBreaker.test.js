@@ -248,12 +248,6 @@ describe("circuitBreaker", () => {
       expect(breaker.getState().name).toBe("email_service");
     });
 
-    it("should return pre-configured breaker for sms", () => {
-      const breaker = getBreaker("sms");
-
-      expect(breaker.getState().name).toBe("sms_service");
-    });
-
     it("should return default breaker for unknown service", () => {
       const breaker = getBreaker("unknown");
 

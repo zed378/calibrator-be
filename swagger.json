@@ -188,6 +188,10 @@
       "description": "Tenant-scoped analytics and reporting"
     },
     {
+      "name": "Storage",
+      "description": "Per-tenant object storage (bring-your-own bucket) + signed downloads"
+    },
+    {
       "name": "Tickets",
       "description": "Support / help-desk tickets (raise, triage, assign, discuss, resolve)"
     },
@@ -8587,7 +8591,6 @@
                       "type": "string",
                       "enum": [
                         "email",
-                        "sms",
                         "webhook"
                       ]
                     },
@@ -9120,30 +9123,59 @@
     },
     "/api/v1/oidc/.well-known/openid-configuration": {
       "get": {
-        "summary": "OIDC discovery metadata",
-        "description": "Returns the OpenID Connect provider discovery metadata document.",
+        "summary": "OIDC discovery metadata (public)",
+        "description": "Returns the OpenID Connect provider discovery metadata document. No authentication required.",
         "tags": [
           "OIDC"
-        ],
-        "security": [
-          {
-            "bearerAuth": []
-          }
         ],
         "responses": {
           "200": {
             "description": "OIDC discovery metadata"
-          },
-          "401": {
-            "description": "Unauthorized"
           }
         }
       }
     },
     "/api/v1/oidc/.well-known/jwks.json": {
       "get": {
-        "summary": "Provider JWKS",
-        "description": "Returns the provider's JSON Web Key Set.",
+        "summary": "Provider JWKS (public)",
+        "description": "Returns the provider's JSON Web Key Set. No authentication required.",
+        "tags": [
+          "OIDC"
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON Web Key Set"
+          }
+        }
+      }
+    },
+    "/api/v1/oidc/authorize": {
+      "get": {
+        "summary": "OIDC authorization endpoint (public; redirects to consent)",
+        "tags": [
+          "OIDC"
+        ]
+      }
+    },
+    "/api/v1/oidc/token": {
+      "post": {
+        "summary": "OIDC token endpoint (public; client-authenticated)",
+        "tags": [
+          "OIDC"
+        ]
+      }
+    },
+    "/api/v1/oidc/userinfo": {
+      "get": {
+        "summary": "OIDC userinfo endpoint (public; Bearer access token)",
+        "tags": [
+          "OIDC"
+        ]
+      }
+    },
+    "/api/v1/oidc/authorize/request/{requestId}": {
+      "get": {
+        "summary": "Fetch a staged authorization request (for the consent screen)",
         "tags": [
           "OIDC"
         ],
@@ -9151,15 +9183,20 @@
           {
             "bearerAuth": []
           }
+        ]
+      }
+    },
+    "/api/v1/oidc/authorize/decision": {
+      "post": {
+        "summary": "Approve or deny an authorization request",
+        "tags": [
+          "OIDC"
         ],
-        "responses": {
-          "200": {
-            "description": "JSON Web Key Set"
-          },
-          "401": {
-            "description": "Unauthorized"
+        "security": [
+          {
+            "bearerAuth": []
           }
-        }
+        ]
       }
     },
     "/api/v1/oidc/clients": {
@@ -13408,6 +13445,169 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/storage/object": {
+      "get": {
+        "summary": "Stream an object from a signed, expiring URL (no auth)",
+        "description": "Where local/NFS signed download URLs resolve. The key encodes the owning tenant, and the HMAC token is verified before storage is touched, so a token for one tenant's key can only ever open that tenant's object. S3-backed tenants get presigned URLs that never reach this route.",
+        "tags": [
+          "Storage"
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Object stream"
+          },
+          "403": {
+            "description": "Invalid or expired link"
+          },
+          "404": {
+            "description": "Object not found"
+          }
+        }
+      }
+    },
+    "/api/v1/storage/settings": {
+      "get": {
+        "summary": "Get the tenant's storage configuration (secrets redacted)",
+        "tags": [
+          "Storage"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Storage settings"
+          }
+        }
+      },
+      "put": {
+        "summary": "Configure the tenant's own storage (health-checked before save)",
+        "tags": [
+          "Storage"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "s3",
+                      "nfs"
+                    ]
+                  },
+                  "bucket": {
+                    "type": "string"
+                  },
+                  "region": {
+                    "type": "string"
+                  },
+                  "endpoint": {
+                    "type": "string"
+                  },
+                  "accessKeyId": {
+                    "type": "string"
+                  },
+                  "secretAccessKey": {
+                    "type": "string"
+                  },
+                  "root": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Storage settings updated"
+          },
+          "422": {
+            "description": "Storage connection test failed"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Revert the tenant to the platform default storage",
+        "tags": [
+          "Storage"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reverted to platform default"
+          }
+        }
+      }
+    },
+    "/api/v1/storage/settings/test": {
+      "post": {
+        "summary": "Health-check the tenant's active storage backend",
+        "tags": [
+          "Storage"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connection test result"
+          }
+        }
+      }
+    },
+    "/api/v1/storage/usage": {
+      "get": {
+        "summary": "Report the tenant's total stored bytes/objects (metering input)",
+        "tags": [
+          "Storage"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Usage retrieved"
           }
         }
       }

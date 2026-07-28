@@ -113,6 +113,8 @@ jest.mock("../../models", () => {
     }),
     Role: model(),
     AuditLog: model(),
+    Notification: model(),
+    Session: model(),
     CalibrationDevice: model(),
     CalibrationRecord: model(),
     Certificate: model(),
@@ -135,9 +137,15 @@ jest.mock("../../models", () => {
   };
 });
 
+jest.mock("../../services/dataRetention.service", () => ({
+  isOnLegalHold: jest.fn().mockResolvedValue(false),
+}));
+
 const gdprService = require("../../services/gdpr.service");
+const dataRetentionService = require("../../services/dataRetention.service");
 const {
   User,
+  AuditLog,
   ConsentRecord,
   DataRetentionPolicy,
   DsarRequest,
@@ -570,6 +578,70 @@ describe("gdprService", () => {
       const result = await gdprService.enforceDataRetention();
       expect(result.enforced).toBe(false);
       expect(result.error).toBe("DB find failure");
+    });
+
+    it("purges a known entity type for a tenant not on legal hold", async () => {
+      dataRetentionService.isOnLegalHold.mockResolvedValue(false);
+      AuditLog.destroy.mockResolvedValue(4);
+      DataRetentionPolicy.findAll.mockResolvedValueOnce([
+        { id: "p1", entityType: "audit_logs", tenantId: "t1", retentionDays: 30, isActive: true },
+      ]);
+
+      const result = await gdprService.enforceDataRetention();
+
+      expect(dataRetentionService.isOnLegalHold).toHaveBeenCalledWith("t1");
+      expect(AuditLog.destroy).toHaveBeenCalled();
+      expect(result.purged).toBe(4);
+    });
+
+    it("skips purge for a tenant on legal hold", async () => {
+      dataRetentionService.isOnLegalHold.mockResolvedValue(true);
+      AuditLog.destroy.mockResolvedValue(9);
+      DataRetentionPolicy.findAll.mockResolvedValueOnce([
+        { id: "p1", entityType: "audit_logs", tenantId: "t1", retentionDays: 30, isActive: true },
+      ]);
+
+      const result = await gdprService.enforceDataRetention();
+
+      expect(AuditLog.destroy).not.toHaveBeenCalled();
+      expect(result.purged).toBe(0);
+    });
+
+    it("purges a policy with no tenant scope without checking legal hold", async () => {
+      AuditLog.destroy.mockResolvedValue(2);
+      DataRetentionPolicy.findAll.mockResolvedValueOnce([
+        { id: "p1", entityType: "AuditLog", retentionDays: 10, isActive: true },
+      ]);
+
+      const result = await gdprService.enforceDataRetention();
+
+      expect(dataRetentionService.isOnLegalHold).not.toHaveBeenCalled();
+      expect(result.purged).toBe(2);
+    });
+
+    it("treats a null destroy result as zero purged", async () => {
+      dataRetentionService.isOnLegalHold.mockResolvedValue(false);
+      AuditLog.destroy.mockResolvedValue(null);
+      DataRetentionPolicy.findAll.mockResolvedValueOnce([
+        { id: "p1", entityType: "audit_logs", tenantId: "t1", retentionDays: 30, isActive: true },
+      ]);
+
+      const result = await gdprService.enforceDataRetention();
+
+      expect(result.purged).toBe(0);
+    });
+
+    it("defaults a missing retentionDays to zero (purge-from-now)", async () => {
+      dataRetentionService.isOnLegalHold.mockResolvedValue(false);
+      AuditLog.destroy.mockResolvedValue(1);
+      DataRetentionPolicy.findAll.mockResolvedValueOnce([
+        { id: "p1", entityType: "audit_logs", tenantId: "t1", isActive: true },
+      ]);
+
+      const result = await gdprService.enforceDataRetention();
+
+      expect(AuditLog.destroy).toHaveBeenCalled();
+      expect(result.purged).toBe(1);
     });
   });
 

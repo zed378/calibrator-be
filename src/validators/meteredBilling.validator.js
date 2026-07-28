@@ -15,7 +15,7 @@ exports.createUsageAlert = Joi.object({
   threshold: Joi.number().positive().required(),
   comparison: Joi.string().valid("gte", "lte", "eq", "gt", "lt").default("gte"),
   notificationChannels: Joi.array()
-    .items(Joi.string().valid("email", "sms", "webhook"))
+    .items(Joi.string().valid("email", "webhook"))
     .default(["email"]),
   isEnabled: Joi.boolean().default(true),
   description: Joi.string().allow("").default(""),

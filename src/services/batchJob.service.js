@@ -1,8 +1,26 @@
 const { BatchJob } = require("../models");
 const { AppError } = require("../utils/appError.util");
+const { logger } = require("../middlewares/activityLog.middleware");
+const rabbitmq = require("./rabbitmq.service");
 
-// In a real application, you would import a queue publisher (like RabbitMQ channel)
-// const { publishToQueue } = require("./rabbitmq.service");
+const BATCH_QUEUE = "batch_jobs";
+const BATCH_DLQ = "batch_jobs_dlq";
+// Inline mode processes jobs in-process (no broker). Useful for local dev and
+// tests; production runs the RabbitMQ worker (src/workers/batchJob.worker.js).
+const INLINE = process.env.BATCH_JOBS_INLINE === "true";
+
+// Registry of real per-type processors. A handler receives the BatchJob
+// instance and does the actual work, updating processedItems/progress as it
+// goes. Types with no registered handler simply complete (a no-op job).
+const HANDLERS = {};
+
+/** Register a processor for a batch-job type. */
+exports.registerHandler = (type, fn) => {
+  HANDLERS[type] = fn;
+};
+
+/** Test/introspection helper: the set of registered handler types. */
+exports.registeredTypes = () => Object.keys(HANDLERS);
 
 exports.createJob = async (tenantId, userId, type, totalItems = 0) => {
   const job = await BatchJob.create({
@@ -14,13 +32,78 @@ exports.createJob = async (tenantId, userId, type, totalItems = 0) => {
     totalItems,
   });
 
-  // Example: Publish to a message queue for processing
-  // publishToQueue("batch-jobs", { jobId: job.id, tenantId, type });
+  const payload = { jobId: job.id, tenantId, type };
 
-  // For demonstration, we'll kick off processing asynchronously here
-  this.simulateProcessing(job.id);
+  // Prefer the durable queue so work survives restarts and scales horizontally.
+  let queued = false;
+  if (!INLINE) {
+    try {
+      await rabbitmq.assertQueue(BATCH_QUEUE, BATCH_DLQ);
+      queued = await rabbitmq.publish(BATCH_QUEUE, payload);
+    } catch (err) {
+      logger.warn("Batch queue unavailable; processing job inline", {
+        jobId: job.id,
+        error: err.message,
+      });
+    }
+  }
+
+  // No broker (or inline mode): process without blocking the caller. State lives
+  // in the DB, so this is restart-observable rather than a fabricated timer.
+  if (!queued) {
+    exports
+      .runJob(job.id)
+      .catch((err) =>
+        logger.error("Inline batch job failed", {
+          jobId: job.id,
+          error: err.message,
+        }),
+      );
+  }
 
   return job;
+};
+
+/**
+ * Execute a job by id: mark PROCESSING, run its registered handler (if any),
+ * then mark COMPLETED. All state is persisted, so a crashed/restarted worker
+ * can be re-driven from the queue. Called by the worker and by the inline
+ * fallback.
+ */
+exports.runJob = async (jobId) => {
+  const job = await BatchJob.findByPk(jobId);
+  if (!job) {
+    return null;
+  }
+
+  try {
+    await job.update({ status: "PROCESSING" });
+
+    const handler = HANDLERS[job.type];
+    if (handler) {
+      await handler(job);
+    }
+
+    // Re-read to pick up any progress the handler persisted; don't clobber a
+    // job the handler explicitly failed.
+    const fresh = await BatchJob.findByPk(jobId);
+    if (fresh && fresh.status !== "FAILED") {
+      await fresh.update({
+        status: "COMPLETED",
+        progress: 100,
+        processedItems: fresh.totalItems || fresh.processedItems || 0,
+        resultUrl: `/api/v1/jobs/${jobId}/download`,
+      });
+    }
+    return fresh;
+  } catch (err) {
+    logger.error("Batch job failed", { jobId, error: err.message });
+    await BatchJob.update(
+      { status: "FAILED", errorDetails: err.message },
+      { where: { id: jobId } },
+    );
+    throw err;
+  }
 };
 
 exports.getJobs = async (tenantId, page = 1, limit = 10) => {
@@ -53,45 +136,6 @@ exports.getJobStatus = async (tenantId, jobId) => {
   return job;
 };
 
-// Simple background worker simulation
-exports.simulateProcessing = async (jobId) => {
-  setTimeout(async () => {
-    try {
-      const job = await BatchJob.findByPk(jobId);
-      if (!job) return;
-
-      job.status = "PROCESSING";
-      await job.save();
-
-      // Simulate some work steps
-      let processed = 0;
-      const total = job.totalItems > 0 ? job.totalItems : 10;
-      
-      const interval = setInterval(async () => {
-        processed += 1;
-        
-        // Reload job in case it was modified
-        const currentJob = await BatchJob.findByPk(jobId);
-        if (!currentJob || currentJob.status === "FAILED") {
-          clearInterval(interval);
-          return;
-        }
-
-        currentJob.processedItems = processed;
-        currentJob.progress = Math.floor((processed / total) * 100);
-        
-        if (processed >= total) {
-          currentJob.status = "COMPLETED";
-          currentJob.resultUrl = "/api/v1/jobs/" + jobId + "/download"; // mock url
-          clearInterval(interval);
-        }
-        
-        await currentJob.save();
-      }, 1000); // 1 second per item
-
-    } catch (err) {
-      console.error("Job Simulation Error:", err);
-      BatchJob.update({ status: "FAILED", errorDetails: err.message }, { where: { id: jobId } });
-    }
-  }, 1000);
-};
+// Queue names exported for the worker.
+exports.BATCH_QUEUE = BATCH_QUEUE;
+exports.BATCH_DLQ = BATCH_DLQ;

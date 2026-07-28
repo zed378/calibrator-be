@@ -1,3 +1,15 @@
+/**
+ * Realtime hub — Socket.IO.
+ *
+ * Authenticates the handshake with the short-lived socket token (see
+ * POST /api/v1/auth/socket-token — the app JWT lives in an httpOnly cookie that
+ * browser JS cannot read). On connect, the socket joins its tenant room and a
+ * per-user room; super admins additionally join a global room. Kanban board
+ * rooms are joined on demand after an access check.
+ *
+ * Exported surface: initSocket / getIo / emitToBoard.
+ */
+
 const { Server } = require("socket.io");
 const { verifyAccessToken } = require("../utils/jwt.util");
 const { User, Tenant, Role } = require("../models");
@@ -15,7 +27,7 @@ exports.initSocket = (server) => {
     },
   });
 
-  // Socket Authentication Middleware
+  // Socket authentication middleware.
   io.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth.token || socket.handshake.query.token;
@@ -24,8 +36,7 @@ exports.initSocket = (server) => {
         return next(new Error("Authentication error: Token missing"));
       }
 
-      // NOTE: app tokens are signed with JWT_ACCESS_SECRET (HS256) — the
-      // previous process.env.JWT_SECRET was never set, breaking socket auth.
+      // App tokens are signed with JWT_ACCESS_SECRET (HS256).
       const decoded = verifyAccessToken(token);
 
       const user = await User.findByPk(decoded.id, {
@@ -48,12 +59,14 @@ exports.initSocket = (server) => {
   });
 
   io.on("connection", (socket) => {
-    console.log(`[Socket] User connected: ${socket.user.id} (Tenant: ${socket.user.tenantId})`);
+    console.log(
+      `[Socket] User connected: ${socket.user.id} (Tenant: ${socket.user.tenantId})`,
+    );
 
-    // Join tenant room for tenant-scoped broadcasts (tenant isolation)
+    // Join tenant room for tenant-scoped broadcasts (tenant isolation).
     socket.join(`tenant_${socket.user.tenantId}`);
 
-    // Join user room for direct messages
+    // Join user room for direct messages.
     socket.join(`user_${socket.user.id}`);
 
     // Super admins additionally join a global room so they receive EVERY

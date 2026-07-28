@@ -1,18 +1,48 @@
-const crypto = require("crypto");
+/**
+ * WebAuthn / passkey service.
+ *
+ * Real FIDO2 attestation and assertion verification via @simplewebauthn/server:
+ * registration parses the authenticator's attestation and stores its actual COSE
+ * public key + signature counter; authentication verifies the assertion
+ * signature over authenticatorData||SHA256(clientDataJSON) against that stored
+ * key and enforces counter monotonicity (clone/rollback detection).
+ *
+ * The registration/authentication challenge is held in Redis (shared, TTL'd) so
+ * the flow is correct across multiple instances — a per-process Map would fail
+ * whenever options are issued on one instance and verified on another.
+ */
+
+const {
+  generateRegistrationOptions,
+  verifyRegistrationResponse,
+  generateAuthenticationOptions,
+  verifyAuthenticationResponse,
+} = require("@simplewebauthn/server");
+
 const { Users } = require("../models");
 const { AppError } = require("../utils/appError.util");
 const { logger } = require("../middlewares/activityLog.middleware");
+const redis = require("./redis.service");
 
 const RP_NAME = "Callibrator";
 const RP_ID = process.env.WEBAUTHN_RP_ID || "localhost";
+// The origin the browser reports in clientDataJSON. Must match exactly.
+const ORIGIN =
+  process.env.WEBAUTHN_ORIGIN ||
+  (RP_ID === "localhost" ? "http://localhost:3000" : `https://${RP_ID}`);
+const CHALLENGE_TTL_SECONDS = 300; // 5 minutes
 
-const challengeStore = new Map();
+const challengeKey = (userId) => `webauthn:challenge:${userId}`;
 
 function base64urlEncode(buffer) {
-  return Buffer.from(buffer).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return Buffer.from(buffer)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
-function base64urlDecode(str) {
+function base64urlToBuffer(str) {
   let b64 = str.replace(/-/g, "+").replace(/_/g, "/");
   while (b64.length % 4) {
     b64 += "=";
@@ -20,136 +50,161 @@ function base64urlDecode(str) {
   return Buffer.from(b64, "base64");
 }
 
-function generateChallenge() {
-  return crypto.randomBytes(32);
+async function storeChallenge(userId, challenge) {
+  const ok = await redis.set(challengeKey(userId), challenge, CHALLENGE_TTL_SECONDS);
+  if (!ok) {
+    // No shared store means we cannot safely verify later — fail loudly rather
+    // than silently degrade to an unverifiable flow.
+    throw new AppError(503, "WebAuthn temporarily unavailable");
+  }
 }
 
-async function getCredentialOptions(user, existingCredentials = []) {
-  const challenge = generateChallenge();
-  const userHandle = crypto.createHash("sha256").update(user.id).digest();
+async function consumeChallenge(userId) {
+  const challenge = await redis.get(challengeKey(userId));
+  await redis.del(challengeKey(userId));
+  return challenge;
+}
 
-  challengeStore.set(user.id, challenge);
-
-  return {
-    challenge: base64urlEncode(challenge),
-    rp: { name: RP_NAME, id: RP_ID },
-    user: {
-      id: base64urlEncode(userHandle),
-      name: user.email,
-      displayName: `${user.firstName || ""} ${user.lastName || ""}`.trim() || user.email,
-    },
-    pubKeyCredParams: [
-      { type: "public-key", alg: -7 },
-      { type: "public-key", alg: -257 },
-    ],
+/**
+ * Build registration (attestation) options and stash the challenge.
+ */
+async function getRegistrationOptions(user, existingCredentials = []) {
+  const options = await generateRegistrationOptions({
+    rpName: RP_NAME,
+    rpID: RP_ID,
+    userID: Buffer.from(String(user.id)),
+    userName: user.email,
+    userDisplayName:
+      `${user.firstName || ""} ${user.lastName || ""}`.trim() || user.email,
+    attestationType: "none",
     excludeCredentials: existingCredentials.map((cred) => ({
       id: cred.credentialId,
-      type: "public-key",
-      transports: cred.transports || ["usb", "nfc", "ble"],
+      transports: cred.transports,
     })),
     authenticatorSelection: {
-      authenticatorAttachment: "platform",
-      requireResidentKey: true,
       residentKey: "required",
       userVerification: "required",
     },
     timeout: 60000,
-    attestation: "none",
-  };
+  });
+
+  await storeChallenge(user.id, options.challenge);
+  return options;
 }
 
-async function getAssertionOptions(userId) {
-  const challenge = generateChallenge();
-  challengeStore.set(userId, challenge);
+/**
+ * Build authentication (assertion) options and stash the challenge. Restricts
+ * allowCredentials to the user's enrolled credential when present.
+ */
+async function getLoginOptions(userId) {
+  const user = await Users.findOne({ where: { id: userId } });
 
-  return {
-    challenge: base64urlEncode(challenge),
-    rpId: RP_ID,
-    allowCredentials: [],
+  const allowCredentials =
+    user && user.webauthnCredentialId
+      ? [{ id: user.webauthnCredentialId }]
+      : [];
+
+  const options = await generateAuthenticationOptions({
+    rpID: RP_ID,
+    allowCredentials,
     userVerification: "required",
     timeout: 60000,
-  };
+  });
+
+  await storeChallenge(userId, options.challenge);
+  return options;
 }
 
-async function verifyAttestation(tenantId, userId, attestationResponse) {
+/**
+ * Verify an attestation and persist the authenticator's real public key.
+ */
+async function verifyRegistration(tenantId, userId, attestationResponse) {
+  const expectedChallenge = await consumeChallenge(userId);
+  if (!expectedChallenge) {
+    throw new AppError(400, "Challenge expired or not found");
+  }
+
+  let verification;
   try {
-    const { rawId, response } = attestationResponse;
-    const credentialId = base64urlDecode(rawId);
-    const clientDataJSON = base64urlDecode(response.clientDataJSON);
-
-    const clientData = JSON.parse(clientDataJSON.toString("utf8"));
-
-    if (clientData.type !== "webauthn.create") {
-      throw new AppError(400, "Invalid attestation type");
-    }
-
-    const expectedChallenge = challengeStore.get(userId);
-    if (!expectedChallenge || clientData.challenge !== base64urlEncode(expectedChallenge)) {
-      throw new AppError(400, "Invalid challenge");
-    }
-
-    challengeStore.delete(userId);
-
-    const publicKey = crypto.generateKeyPairSync("rsa", {
-      modulusLength: 2048,
-      publicKeyEncoding: { type: "spki", format: "pem" },
-      privateKeyEncoding: { type: "pkcs8", format: "pem" },
-    }).publicKey;
-
-    const credentialPublicKey = publicKey.toString("base64");
-
-    await Users.update(
-      {
-        webauthnCredentialId: credentialId.toString("hex"),
-        webauthnPublicKey: credentialPublicKey,
-        webauthnSignCount: 0,
-        webauthnEnabled: true,
-      },
-      { where: { id: userId, tenantId } },
-    );
-
-    return { success: true };
+    verification = await verifyRegistrationResponse({
+      response: attestationResponse,
+      expectedChallenge,
+      expectedOrigin: ORIGIN,
+      expectedRPID: RP_ID,
+      requireUserVerification: true,
+    });
   } catch (err) {
-    logger.error("WebAuthn attestation verification failed", { error: err.message });
+    logger.error("WebAuthn attestation verification failed", {
+      error: err.message,
+    });
     throw new AppError(400, "WebAuthn registration failed");
   }
+
+  if (!verification.verified || !verification.registrationInfo) {
+    throw new AppError(400, "WebAuthn registration could not be verified");
+  }
+
+  const { credential } = verification.registrationInfo;
+
+  await Users.update(
+    {
+      webauthnCredentialId: credential.id,
+      webauthnPublicKey: base64urlEncode(credential.publicKey),
+      webauthnSignCount: credential.counter,
+      webauthnEnabled: true,
+    },
+    { where: { id: userId, tenantId } },
+  );
+
+  return { success: true };
 }
 
-async function verifyAssertion(tenantId, userId, assertionResponse) {
+/**
+ * Verify an assertion signature against the stored public key and advance the
+ * signature counter.
+ */
+async function verifyLogin(tenantId, userId, assertionResponse) {
+  const user = await Users.findOne({ where: { id: userId, tenantId } });
+  if (!user || !user.webauthnEnabled || !user.webauthnCredentialId) {
+    throw new AppError(404, "WebAuthn not enabled for this user");
+  }
+
+  const expectedChallenge = await consumeChallenge(userId);
+  if (!expectedChallenge) {
+    throw new AppError(400, "Challenge expired or not found");
+  }
+
+  let verification;
   try {
-    const { rawId, response } = assertionResponse;
-    const credentialId = base64urlDecode(rawId);
-    const clientDataJSON = base64urlDecode(response.clientDataJSON);
-
-    const clientData = JSON.parse(clientDataJSON.toString("utf8"));
-
-    if (clientData.type !== "webauthn.get") {
-      throw new AppError(400, "Invalid assertion type");
-    }
-
-    const expectedChallenge = challengeStore.get(userId);
-    if (!expectedChallenge || clientData.challenge !== base64urlEncode(expectedChallenge)) {
-      throw new AppError(400, "Invalid challenge");
-    }
-
-    challengeStore.delete(userId);
-
-    const user = await Users.findOne({ where: { id: userId, tenantId } });
-    if (!user || !user.webauthnEnabled) {
-      throw new AppError(404, "WebAuthn not enabled for this user");
-    }
-
-    if (user.webauthnCredentialId !== credentialId.toString("hex")) {
-      throw new AppError(400, "Invalid credential ID");
-    }
-
-    await Users.update({ webauthnSignCount: user.webauthnSignCount + 1 }, { where: { id: userId } });
-
-    return { success: true };
+    verification = await verifyAuthenticationResponse({
+      response: assertionResponse,
+      expectedChallenge,
+      expectedOrigin: ORIGIN,
+      expectedRPID: RP_ID,
+      requireUserVerification: true,
+      credential: {
+        id: user.webauthnCredentialId,
+        publicKey: base64urlToBuffer(user.webauthnPublicKey),
+        counter: user.webauthnSignCount || 0,
+      },
+    });
   } catch (err) {
-    logger.error("WebAuthn assertion verification failed", { error: err.message });
+    logger.error("WebAuthn assertion verification failed", {
+      error: err.message,
+    });
     throw new AppError(401, "WebAuthn authentication failed");
   }
+
+  if (!verification.verified) {
+    throw new AppError(401, "WebAuthn authentication failed");
+  }
+
+  await Users.update(
+    { webauthnSignCount: verification.authenticationInfo.newCounter },
+    { where: { id: userId } },
+  );
+
+  return { success: true };
 }
 
 async function getStatus(tenantId, userId) {
@@ -172,7 +227,12 @@ async function getStatus(tenantId, userId) {
 
 async function disableWebauthn(tenantId, userId) {
   await Users.update(
-    { webauthnEnabled: false, webauthnCredentialId: null, webauthnPublicKey: null },
+    {
+      webauthnEnabled: false,
+      webauthnCredentialId: null,
+      webauthnPublicKey: null,
+      webauthnSignCount: 0,
+    },
     { where: { id: userId, tenantId } },
   );
 
@@ -180,8 +240,8 @@ async function disableWebauthn(tenantId, userId) {
 }
 
 exports.getStatus = getStatus;
-exports.getRegistrationOptions = getCredentialOptions;
-exports.getLoginOptions = getAssertionOptions;
-exports.verifyRegistration = verifyAttestation;
-exports.verifyLogin = verifyAssertion;
+exports.getRegistrationOptions = getRegistrationOptions;
+exports.getLoginOptions = getLoginOptions;
+exports.verifyRegistration = verifyRegistration;
+exports.verifyLogin = verifyLogin;
 exports.disable = disableWebauthn;

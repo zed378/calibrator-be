@@ -761,17 +761,63 @@ exports.enforceDataRetention = async () => {
 };
 
 /**
- * Purge expired data for a policy
+ * Purge expired data for a single retention policy.
+ *
+ * Deletes rows of the policy's entity type older than its retention window for
+ * the policy's tenant, honoring an active legal hold. Entity types with no known
+ * backing model are logged and skipped (return 0) rather than throwing.
  */
 async function purgeExpiredData(policy) {
-  // Implementation depends on policy type
-  logger.debug("Purging expired data", {
+  const models = require("../models");
+  const { Op } = require("sequelize");
+  const dataRetention = require("./dataRetention.service");
+
+  // Map a policy's entityType (either the snake_case retention key or the model
+  // name) to its Sequelize model.
+  const ENTITY_MODEL = {
+    audit_logs: models.AuditLog,
+    AuditLog: models.AuditLog,
+    notifications: models.Notification,
+    Notification: models.Notification,
+    sessions: models.Session,
+    Session: models.Session,
+  };
+
+  const model = ENTITY_MODEL[policy.entityType];
+  if (!model) {
+    logger.debug("No purge handler for entity type; skipping", {
+      policyId: policy.id,
+      entityType: policy.entityType,
+    });
+    return 0;
+  }
+
+  // Never purge a tenant under legal hold.
+  if (policy.tenantId && (await dataRetention.isOnLegalHold(policy.tenantId))) {
+    logger.info("Purge skipped: legal hold active", {
+      tenantId: policy.tenantId,
+      entityType: policy.entityType,
+    });
+    return 0;
+  }
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - (policy.retentionDays || 0));
+
+  const where = { createdAt: { [Op.lt]: cutoff } };
+  if (policy.tenantId) {
+    where.tenantId = policy.tenantId;
+  }
+
+  const deleted = await model.destroy({ where });
+
+  logger.info("Purged expired data", {
     policyId: policy.id,
     entityType: policy.entityType,
-    retentionDays: policy.retentionDays,
+    deleted,
   });
 
-  return 0;
+  return deleted || 0;
 }
 
 // ==========================================

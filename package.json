@@ -41,6 +41,7 @@
     "build": "bun build index.js --compile --loader:.html=text --target bun-linux-x64 --outfile dist/boilerplate",
     "swagger:generate": "node src/utils/generateSwagger.util.js",
     "migrate": "node src/scripts/migrate.js up",
+    "migrate:storage": "node src/scripts/migrateStorage.js",
     "migrate:undo": "node src/scripts/migrate.js down",
     "migrate:status": "node src/scripts/migrate.js pending",
     "lint": "eslint src/ --ext .js",
@@ -49,12 +50,17 @@
     "prettier:fix": "prettier --write \"src/**/*.js\""
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1094.0",
+    "@aws-sdk/s3-request-presigner": "^3.1094.0",
+    "@simplewebauthn/server": "^13.3.2",
+    "acme-client": "^5.4.0",
     "aedes": "^1.1.1",
     "aedes-server-factory": "^0.2.1",
     "amqplib": "^2.0.1",
     "archiver": "^8.0.0",
     "axios": "^1.18.1",
     "bcryptjs": "^3.0.3",
+    "clamdjs": "^1.0.2",
     "cls-hooked": "^4.2.2",
     "compression": "^1.8.1",
     "connect-timeout": "^1.9.1",
@@ -93,7 +99,6 @@
     "stripe": "^22.3.1",
     "swagger-jsdoc": "^6.3.0",
     "swagger-ui-express": "^5.0.1",
-    "twilio": "^6.0.2",
     "umzug": "^3.8.3",
     "uuid": "^14.0.1",
     "winston": "^3.19.0",
@@ -105,7 +110,6 @@
     "eslint": "^10.5.0",
     "eslint-config-prettier": "^10.1.8",
     "jest": "^30.4.2",
-    "markdown-pdf": "^11.0.0",
     "nodemon": "^3.1.14",
     "prettier": "^3.8.4"
   }

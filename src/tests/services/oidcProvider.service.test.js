@@ -6,6 +6,15 @@ jest.mock("../../models", () => ({
     update: jest.fn(),
     destroy: jest.fn(),
   },
+  Users: {
+    findByPk: jest.fn(),
+  },
+}));
+
+jest.mock("../../services/redis.service", () => ({
+  get: jest.fn(),
+  set: jest.fn().mockResolvedValue(true),
+  del: jest.fn().mockResolvedValue(true),
 }));
 
 const crypto = require("crypto");
@@ -13,7 +22,8 @@ const jwt = require("jsonwebtoken");
 const { Op } = require("sequelize");
 
 const oidc = require("../../services/oidcProvider.service");
-const { TenantSettings } = require("../../models");
+const { TenantSettings, Users } = require("../../models");
+const redis = require("../../services/redis.service");
 
 describe("oidcProvider.service", () => {
   beforeEach(() => jest.clearAllMocks());
@@ -366,6 +376,510 @@ describe("oidcProvider.service", () => {
         value: JSON.stringify({ clientSecretHash: "abcd" }),
       });
       expect(await oidc.verifySecret("t1", "c1", "s")).toBe(false);
+    });
+  });
+
+  // ======================================================================
+  // AUTHORIZATION CODE FLOW
+  // ======================================================================
+  describe("authorization code flow", () => {
+    const USER = {
+      id: "user-1",
+      email: "a@b.c",
+      firstName: "Ada",
+      lastName: "Lovelace",
+    };
+    const CLIENT = {
+      clientId: "c1",
+      name: "Acme RP",
+      redirectUris: ["https://rp.example/cb"],
+      scopes: ["openid", "email"],
+    };
+    const b64url = (buf) =>
+      buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const s256 = (v) => b64url(crypto.createHash("sha256").update(v).digest());
+
+    /** Make TenantSettings.findOne resolve a valid client row (optionally with a secret). */
+    const mockClientRow = (secret) =>
+      TenantSettings.findOne.mockResolvedValue({
+        tenantId: "t1",
+        value: JSON.stringify({
+          ...CLIENT,
+          ...(secret
+            ? { clientSecretHash: crypto.createHash("sha256").update(secret).digest("hex") }
+            : {}),
+        }),
+      });
+
+    describe("findClientByClientId", () => {
+      it("returns null without a clientId", async () => {
+        expect(await oidc.findClientByClientId("")).toBeNull();
+      });
+
+      it("returns null when no row exists", async () => {
+        TenantSettings.findOne.mockResolvedValue(null);
+        expect(await oidc.findClientByClientId("nope")).toBeNull();
+      });
+
+      it("returns null for a corrupt (non-JSON) row", async () => {
+        TenantSettings.findOne.mockResolvedValue({ value: "not-json" });
+        expect(await oidc.findClientByClientId("c1")).toBeNull();
+      });
+
+      it("returns null for a row without a clientId", async () => {
+        TenantSettings.findOne.mockResolvedValue({ value: JSON.stringify({ name: "x" }) });
+        expect(await oidc.findClientByClientId("c1")).toBeNull();
+      });
+
+      it("returns the client with its owning tenantId", async () => {
+        mockClientRow();
+        const client = await oidc.findClientByClientId("c1");
+        expect(client.clientId).toBe("c1");
+        expect(client.tenantId).toBe("t1");
+      });
+    });
+
+    describe("beginAuthorization", () => {
+      const base = {
+        client_id: "c1",
+        redirect_uri: "https://rp.example/cb",
+        response_type: "code",
+      };
+
+      it("rejects an unknown client", async () => {
+        TenantSettings.findOne.mockResolvedValue(null);
+        await expect(oidc.beginAuthorization(base)).rejects.toThrow("Unknown client_id");
+      });
+
+      it("rejects a redirect_uri that is not registered", async () => {
+        mockClientRow();
+        await expect(
+          oidc.beginAuthorization({ ...base, redirect_uri: "https://evil/cb" }),
+        ).rejects.toThrow("redirect_uri is not registered");
+      });
+
+      it("rejects a missing redirect_uri", async () => {
+        mockClientRow();
+        await expect(
+          oidc.beginAuthorization({ ...base, redirect_uri: undefined }),
+        ).rejects.toThrow("redirect_uri is not registered");
+      });
+
+      it("rejects a response_type other than code", async () => {
+        mockClientRow();
+        await expect(
+          oidc.beginAuthorization({ ...base, response_type: "token" }),
+        ).rejects.toThrow("response_type=code");
+      });
+
+      it("rejects an unsupported code_challenge_method", async () => {
+        mockClientRow();
+        await expect(
+          oidc.beginAuthorization({
+            ...base,
+            code_challenge: "abc",
+            code_challenge_method: "S1",
+          }),
+        ).rejects.toThrow("Unsupported code_challenge_method");
+      });
+
+      it("stages the request and returns a consent URL (with PKCE + state + nonce)", async () => {
+        mockClientRow();
+        const result = await oidc.beginAuthorization({
+          ...base,
+          scope: "openid email",
+          state: "st8",
+          nonce: "n1",
+          code_challenge: "chal",
+        });
+
+        expect(result.requestId).toEqual(expect.any(String));
+        expect(result.consentUrl).toContain("/oauth/consent?request=");
+        const [key, payload] = redis.set.mock.calls[0];
+        expect(key).toMatch(/^oidc:authreq:/);
+        expect(payload).toMatchObject({
+          clientId: "c1",
+          tenantId: "t1",
+          redirectUri: "https://rp.example/cb",
+          scope: ["openid", "email"],
+          state: "st8",
+          nonce: "n1",
+          codeChallenge: "chal",
+          codeChallengeMethod: "S256", // defaulted
+        });
+      });
+
+      it("defaults scope to openid and nulls optional params", async () => {
+        mockClientRow();
+        await oidc.beginAuthorization(base);
+        const [, payload] = redis.set.mock.calls[0];
+        expect(payload.scope).toEqual(["openid"]);
+        expect(payload.state).toBeNull();
+        expect(payload.nonce).toBeNull();
+        expect(payload.codeChallenge).toBeNull();
+        expect(payload.codeChallengeMethod).toBeNull();
+      });
+    });
+
+    describe("getAuthRequest", () => {
+      it("returns null without a requestId", async () => {
+        expect(await oidc.getAuthRequest("")).toBeNull();
+      });
+
+      it("returns null when the staged request is gone", async () => {
+        redis.get.mockResolvedValue(null);
+        expect(await oidc.getAuthRequest("r1")).toBeNull();
+      });
+
+      it("returns the display fields for the consent screen", async () => {
+        redis.get.mockResolvedValue({
+          clientName: "Acme RP",
+          scope: ["openid"],
+          redirectUri: "https://rp.example/cb",
+        });
+        expect(await oidc.getAuthRequest("r1")).toEqual({
+          clientName: "Acme RP",
+          scope: ["openid"],
+          redirectUri: "https://rp.example/cb",
+        });
+      });
+    });
+
+    describe("decideAuthorization", () => {
+      it("throws when the request expired", async () => {
+        redis.get.mockResolvedValue(null);
+        await expect(oidc.decideAuthorization("r1", USER, true)).rejects.toThrow(
+          "expired or invalid",
+        );
+      });
+
+      it("returns access_denied (preserving state) when denied", async () => {
+        redis.get.mockResolvedValue({
+          redirectUri: "https://rp.example/cb",
+          state: "st8",
+        });
+        const { redirectTo } = await oidc.decideAuthorization("r1", USER, false);
+        expect(redirectTo).toBe("https://rp.example/cb?state=st8&error=access_denied");
+        expect(redis.del).toHaveBeenCalled();
+      });
+
+      it("mints a single-use code bound to the user when approved (no state)", async () => {
+        redis.get.mockResolvedValue({
+          clientId: "c1",
+          tenantId: "t1",
+          redirectUri: "https://rp.example/cb",
+          scope: ["openid"],
+          state: null,
+          nonce: "n1",
+          codeChallenge: "chal",
+          codeChallengeMethod: "S256",
+        });
+        const { redirectTo } = await oidc.decideAuthorization("r1", USER, true);
+        expect(redirectTo).toMatch(/^https:\/\/rp\.example\/cb\?code=/);
+        const codeCall = redis.set.mock.calls.find(([k]) => k.startsWith("oidc:code:"));
+        expect(codeCall[1]).toMatchObject({ clientId: "c1", userId: "user-1", nonce: "n1" });
+      });
+    });
+
+    describe("exchangeAuthorizationCode", () => {
+      const codeData = {
+        clientId: "c1",
+        tenantId: "t1",
+        userId: "user-1",
+        redirectUri: "https://rp.example/cb",
+        scope: ["openid", "email"],
+        nonce: "n1",
+      };
+
+      it("rejects a missing/expired code", async () => {
+        redis.get.mockResolvedValue(null);
+        await expect(
+          oidc.exchangeAuthorizationCode({ code: "x", clientId: "c1" }),
+        ).rejects.toThrow("invalid_grant");
+      });
+
+      it("rejects a redirect_uri mismatch", async () => {
+        redis.get.mockResolvedValue(codeData);
+        await expect(
+          oidc.exchangeAuthorizationCode({
+            code: "x",
+            clientId: "c1",
+            redirectUri: "https://evil/cb",
+          }),
+        ).rejects.toThrow("redirect_uri mismatch");
+      });
+
+      it("rejects when the code was issued to a different client", async () => {
+        redis.get.mockResolvedValue(codeData);
+        await expect(
+          oidc.exchangeAuthorizationCode({
+            code: "x",
+            clientId: "other",
+            redirectUri: codeData.redirectUri,
+          }),
+        ).rejects.toThrow("invalid_client");
+      });
+
+      it("accepts a valid PKCE verifier (S256) and issues tokens with aud+nonce", async () => {
+        const verifier = "the-code-verifier-value";
+        redis.get.mockResolvedValue({
+          ...codeData,
+          codeChallenge: s256(verifier),
+          codeChallengeMethod: "S256",
+        });
+        Users.findByPk.mockResolvedValue(USER);
+
+        const tokens = await oidc.exchangeAuthorizationCode({
+          code: "x",
+          clientId: "c1",
+          redirectUri: codeData.redirectUri,
+          codeVerifier: verifier,
+        });
+
+        expect(tokens.token_type).toBe("Bearer");
+        const idClaims = jwt.decode(tokens.id_token);
+        expect(idClaims.aud).toBe("c1"); // aud is the client_id, not the email
+        expect(idClaims.nonce).toBe("n1");
+      });
+
+      it("accepts a plain PKCE verifier", async () => {
+        redis.get.mockResolvedValue({
+          ...codeData,
+          codeChallenge: "plain-value",
+          codeChallengeMethod: "plain",
+        });
+        Users.findByPk.mockResolvedValue(USER);
+        const tokens = await oidc.exchangeAuthorizationCode({
+          code: "x",
+          clientId: "c1",
+          redirectUri: codeData.redirectUri,
+          codeVerifier: "plain-value",
+        });
+        expect(tokens.access_token).toEqual(expect.any(String));
+      });
+
+      it("rejects a wrong PKCE verifier", async () => {
+        redis.get.mockResolvedValue({
+          ...codeData,
+          codeChallenge: s256("right"),
+          codeChallengeMethod: "S256",
+        });
+        await expect(
+          oidc.exchangeAuthorizationCode({
+            code: "x",
+            clientId: "c1",
+            redirectUri: codeData.redirectUri,
+            codeVerifier: "wrong",
+          }),
+        ).rejects.toThrow("invalid_client");
+      });
+
+      it("rejects a missing PKCE verifier when a challenge was set", async () => {
+        redis.get.mockResolvedValue({
+          ...codeData,
+          codeChallenge: s256("v"),
+          codeChallengeMethod: "S256",
+        });
+        await expect(
+          oidc.exchangeAuthorizationCode({
+            code: "x",
+            clientId: "c1",
+            redirectUri: codeData.redirectUri,
+          }),
+        ).rejects.toThrow("invalid_client");
+      });
+
+      it("falls back to client_secret auth when no PKCE was used", async () => {
+        redis.get.mockResolvedValue(codeData); // no codeChallenge
+        mockClientRow("s3cret");
+        Users.findByPk.mockResolvedValue(USER);
+
+        const tokens = await oidc.exchangeAuthorizationCode({
+          code: "x",
+          clientId: "c1",
+          clientSecret: "s3cret",
+          redirectUri: codeData.redirectUri,
+        });
+        expect(tokens.id_token).toEqual(expect.any(String));
+      });
+
+      it("rejects when the user no longer exists", async () => {
+        redis.get.mockResolvedValue({ ...codeData, codeChallenge: s256("v"), codeChallengeMethod: "S256" });
+        Users.findByPk.mockResolvedValue(null);
+        await expect(
+          oidc.exchangeAuthorizationCode({
+            code: "x",
+            clientId: "c1",
+            redirectUri: codeData.redirectUri,
+            codeVerifier: "v",
+          }),
+        ).rejects.toThrow("user no longer exists");
+      });
+    });
+
+    describe("refreshAccessToken", () => {
+      const stored = { tenantId: "t1", userId: "user-1", clientId: "c1", scope: "openid email" };
+
+      it("rejects an unknown refresh token", async () => {
+        redis.get.mockResolvedValue(null);
+        await expect(
+          oidc.refreshAccessToken({ refreshToken: "rt", clientId: "c1" }),
+        ).rejects.toThrow("invalid_grant");
+      });
+
+      it("rejects a client mismatch", async () => {
+        redis.get.mockResolvedValue(stored);
+        await expect(
+          oidc.refreshAccessToken({ refreshToken: "rt", clientId: "other" }),
+        ).rejects.toThrow("invalid_client");
+      });
+
+      it("rejects a bad client secret", async () => {
+        redis.get.mockResolvedValue(stored);
+        mockClientRow("right-secret");
+        await expect(
+          oidc.refreshAccessToken({ refreshToken: "rt", clientId: "c1", clientSecret: "wrong" }),
+        ).rejects.toThrow("invalid_client");
+      });
+
+      it("rejects when the user no longer exists", async () => {
+        redis.get.mockResolvedValue(stored);
+        mockClientRow("s3cret");
+        Users.findByPk.mockResolvedValue(null);
+        await expect(
+          oidc.refreshAccessToken({ refreshToken: "rt", clientId: "c1", clientSecret: "s3cret" }),
+        ).rejects.toThrow("user no longer exists");
+      });
+
+      it("rotates the refresh token and reissues", async () => {
+        redis.get.mockResolvedValue(stored);
+        mockClientRow("s3cret");
+        Users.findByPk.mockResolvedValue(USER);
+
+        const tokens = await oidc.refreshAccessToken({
+          refreshToken: "rt",
+          clientId: "c1",
+          clientSecret: "s3cret",
+        });
+
+        expect(redis.del).toHaveBeenCalledWith("oidc:refresh:rt"); // rotated
+        expect(tokens.refresh_token).toHaveLength(128);
+        expect(jwt.decode(tokens.id_token).aud).toBe("c1");
+      });
+    });
+
+    describe("getUserInfo", () => {
+      const tokenFor = async (scopes) => {
+        const t = await oidc.issueTokens("t1", USER, scopes, { clientId: "c1" });
+        return t.access_token;
+      };
+
+      it("rejects an unverifiable token", async () => {
+        await expect(oidc.getUserInfo("not-a-jwt")).rejects.toThrow("invalid_token");
+      });
+
+      it("returns only sub when neither email nor profile is scoped", async () => {
+        const claims = await oidc.getUserInfo(await tokenFor(["openid"]));
+        expect(claims).toEqual({ sub: "user-1" });
+      });
+
+      it("includes email for the email scope", async () => {
+        const claims = await oidc.getUserInfo(await tokenFor(["openid", "email"]));
+        expect(claims.email).toBe("a@b.c");
+      });
+
+      it("includes profile claims when the user is found", async () => {
+        Users.findByPk.mockResolvedValue(USER);
+        const claims = await oidc.getUserInfo(await tokenFor(["openid", "profile"]));
+        expect(claims).toMatchObject({
+          given_name: "Ada",
+          family_name: "Lovelace",
+          name: "Ada Lovelace",
+        });
+      });
+
+      it("omits profile claims when the user row is gone", async () => {
+        Users.findByPk.mockResolvedValue(null);
+        const claims = await oidc.getUserInfo(await tokenFor(["openid", "profile"]));
+        expect(claims.given_name).toBeUndefined();
+      });
+
+      it("tolerates a token with an empty scope", async () => {
+        const claims = await oidc.getUserInfo(await tokenFor([]));
+        expect(claims).toEqual({ sub: "user-1" });
+      });
+
+      it("leaves name undefined for a user with no first/last name", async () => {
+        Users.findByPk.mockResolvedValue({ id: "user-1", email: "a@b.c" });
+        const claims = await oidc.getUserInfo(await tokenFor(["openid", "profile"]));
+        expect(claims.name).toBeUndefined();
+      });
+    });
+
+    // Falsy-argument and fallback paths.
+    describe("edge cases", () => {
+      it("treats a client with no redirectUris as unregistered", async () => {
+        TenantSettings.findOne.mockResolvedValue({
+          tenantId: "t1",
+          value: JSON.stringify({ clientId: "c1", name: "No URIs" }),
+        });
+        await expect(
+          oidc.beginAuthorization({
+            client_id: "c1",
+            redirect_uri: "https://rp.example/cb",
+            response_type: "code",
+          }),
+        ).rejects.toThrow("redirect_uri is not registered");
+      });
+
+      it("decideAuthorization rejects a missing requestId", async () => {
+        await expect(oidc.decideAuthorization("", USER, true)).rejects.toThrow(
+          "expired or invalid",
+        );
+      });
+
+      it("exchange rejects a missing code without hitting redis", async () => {
+        await expect(
+          oidc.exchangeAuthorizationCode({ clientId: "c1" }),
+        ).rejects.toThrow("invalid_grant");
+      });
+
+      it("exchange rejects a confidential client that sends no secret", async () => {
+        redis.get.mockResolvedValue({
+          clientId: "c1",
+          tenantId: "t1",
+          userId: "user-1",
+          redirectUri: "https://rp.example/cb",
+          scope: ["openid"],
+        }); // no codeChallenge -> secret required
+        mockClientRow("s3cret");
+        await expect(
+          oidc.exchangeAuthorizationCode({
+            code: "x",
+            clientId: "c1",
+            redirectUri: "https://rp.example/cb",
+          }),
+        ).rejects.toThrow("invalid_client");
+      });
+
+      it("refresh rejects a missing refresh token without hitting redis", async () => {
+        await expect(
+          oidc.refreshAccessToken({ clientId: "c1" }),
+        ).rejects.toThrow("invalid_grant");
+      });
+
+      it("refresh rejects when no client secret is supplied", async () => {
+        redis.get.mockResolvedValue({
+          tenantId: "t1",
+          userId: "user-1",
+          clientId: "c1",
+          scope: "openid",
+        });
+        mockClientRow("s3cret");
+        await expect(
+          oidc.refreshAccessToken({ refreshToken: "rt", clientId: "c1" }),
+        ).rejects.toThrow("invalid_client");
+      });
     });
   });
 });

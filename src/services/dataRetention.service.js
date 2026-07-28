@@ -162,6 +162,43 @@ exports.purgeExpiredRecords = async (tenantId) => {
   return { tenantId, purged: results, skipped: false };
 };
 
+/**
+ * Run the retention purge across every tenant. Intended for the scheduled job:
+ * it has no request/tenant CLS context, so the isolation hooks run unscoped and
+ * each purgeExpiredRecords call confines itself with its explicit tenantId
+ * predicate. Per-tenant failures are logged and counted, never fatal.
+ *
+ * @returns {Promise<{tenants:number, purged:number, skipped:number, errors:number}>}
+ */
+exports.runRetentionSweep = async () => {
+  const { Tenant } = require('../models');
+  const tenants = await Tenant.findAll({ attributes: ['id'] });
+
+  const summary = { tenants: tenants.length, purged: 0, skipped: 0, errors: 0 };
+
+  for (const tenant of tenants) {
+    try {
+      const result = await exports.purgeExpiredRecords(tenant.id);
+      if (result.skipped) {
+        summary.skipped += 1;
+      } else {
+        summary.purged += Object.values(result.purged || {}).reduce(
+          (sum, n) => sum + n,
+          0,
+        );
+      }
+    } catch (err) {
+      summary.errors += 1;
+      logger.error(
+        `Retention sweep failed for tenant ${tenant.id}: ${err.message}`,
+      );
+    }
+  }
+
+  logger.info('Retention sweep complete', summary);
+  return summary;
+};
+
 exports.maskPII = async (tenantId, entityType, recordIds) => {
   const onLegalHold = await exports.isOnLegalHold(tenantId);
 

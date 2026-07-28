@@ -322,7 +322,8 @@ exports.requestOTP = async (input) => {
     };
   }
 
-  const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+  // Cryptographically secure 6-digit OTP (Math.random is predictable).
+  const otpCode = crypto.randomInt(100000, 1000000).toString();
   const otpHashed = crypto.createHash("sha256").update(otpCode).digest("hex");
   const otpExpiredAt = new Date(Date.now() + 5 * 60 * 1000);
 
@@ -366,11 +367,14 @@ exports.processResetPassword = async (input) => {
   );
 
   const user = await Users.findOne({ where: { email } });
+  // Never reveal whether the account exists — an unknown email returns the
+  // same generic error as a wrong code, preventing user enumeration on reset.
   if (!user) {
-    throw new AppError(404, "Account not found");
+    throw new AppError(400, "Invalid OTP");
   }
 
-  // Verify OTP
+  // Verify OTP (a null stored otpCode never equals a real hash, so this also
+  // covers the "no reset requested" case).
   const providedHash = crypto.createHash("sha256").update(otp).digest("hex");
   if (user.otpCode !== providedHash) {
     throw new AppError(400, "Invalid OTP");

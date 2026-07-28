@@ -125,7 +125,7 @@ async function persistUsage(tenantId, metric, amount) {
     0,
   );
 
-  await UsageMetric.findOrCreate({
+  const [record, created] = await UsageMetric.findOrCreate({
     where: {
       tenantId,
       metric,
@@ -137,12 +137,15 @@ async function persistUsage(tenantId, metric, amount) {
       periodStart,
       count: amount,
     },
-  }).then(([record]) => {
-    if (record.count !== undefined) {
-      record.count += amount;
-      record.save();
-    }
   });
+
+  // On create the row is already seeded with `count: amount`, so adding again
+  // would double-count the first unit of every new bucket. Only accumulate when
+  // the row already existed, and do it atomically (count = count + amount) to
+  // stay correct under concurrent increments.
+  if (!created) {
+    await record.increment("count", { by: amount });
+  }
 }
 
 // ==========================================

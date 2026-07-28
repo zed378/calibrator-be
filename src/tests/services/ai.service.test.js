@@ -6,10 +6,20 @@
 
 jest.mock("../../config", () => ({
   Sequelize: { useCLS: jest.fn() },
+  db: {
+    getDialect: jest.fn(() => "sqlite"),
+    query: jest.fn(),
+    QueryTypes: { SELECT: "SELECT" },
+  },
 }));
 
 jest.mock("../../models", () => ({
   TenantSettings: {
+    findAll: jest.fn(),
+  },
+  DocumentChunk: {
+    destroy: jest.fn(),
+    create: jest.fn(),
     findAll: jest.fn(),
   },
 }));
@@ -37,7 +47,8 @@ jest.mock("axios", () => ({
 }));
 
 const axios = require("axios");
-const { TenantSettings } = require("../../models");
+const { TenantSettings, DocumentChunk } = require("../../models");
+const { db } = require("../../config");
 const aiService = require("../../services/ai.service");
 
 describe("ai.service", () => {
@@ -45,6 +56,12 @@ describe("ai.service", () => {
     jest.clearAllMocks();
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_BASE_URL;
+    // Sensible defaults for the RAG store so retrieval doesn't blow up.
+    db.getDialect.mockReturnValue("sqlite");
+    db.query.mockResolvedValue([]);
+    DocumentChunk.destroy.mockResolvedValue(0);
+    DocumentChunk.create.mockResolvedValue({});
+    DocumentChunk.findAll.mockResolvedValue([]);
   });
 
   // ================================================================
@@ -285,6 +302,138 @@ describe("ai.service", () => {
       expect(logger.error).toHaveBeenCalledWith("RAG completion failed", {
         error: "llm exploded",
       });
+    });
+
+    it("joins retrieved chunks into the context", async () => {
+      const settings = [{ key: "ai_api_key", value: "sk-key" }];
+      TenantSettings.findAll.mockResolvedValue(settings);
+      db.getDialect.mockReturnValue("sqlite");
+      DocumentChunk.findAll.mockResolvedValue([
+        { content: "chunk A" },
+        { content: "chunk B" },
+      ]);
+      axios.post
+        .mockResolvedValueOnce({ data: { data: [{ embedding: [0.1] }] } })
+        .mockResolvedValueOnce({ data: { choices: [{ message: { content: "answer" } }] } });
+
+      const result = await aiService.queryDocuments("tenant-1", "q");
+
+      expect(result).toBe("answer");
+      const chatBody = axios.post.mock.calls[1][1];
+      expect(chatBody.messages[1].content).toContain("chunk A");
+      expect(chatBody.messages[1].content).toContain("chunk B");
+    });
+  });
+
+  // ================================================================
+  describe("chunkText", () => {
+    it("packs paragraphs up to the size cap", () => {
+      const text = "para one\n\npara two\n\npara three";
+      const chunks = aiService.chunkText(text, 20);
+      expect(chunks.length).toBeGreaterThan(1);
+      chunks.forEach((c) => expect(c.length).toBeLessThanOrEqual(20));
+    });
+
+    it("hard-splits a single oversized paragraph", () => {
+      const chunks = aiService.chunkText("x".repeat(2500), 1000);
+      expect(chunks.length).toBe(3);
+      expect(chunks[0].length).toBe(1000);
+    });
+
+    it("returns an empty array for blank input", () => {
+      expect(aiService.chunkText("   \n\n  ")).toEqual([]);
+    });
+  });
+
+  // ================================================================
+  describe("ingestDocument", () => {
+    it("throws when required identifiers are missing", async () => {
+      await expect(
+        aiService.ingestDocument("", { sourceType: "Sop", sourceId: "1", content: "x" }),
+      ).rejects.toThrow("tenantId, sourceType and sourceId are required");
+    });
+
+    it("returns zero chunks for empty content", async () => {
+      const result = await aiService.ingestDocument("t1", {
+        sourceType: "Sop",
+        sourceId: "1",
+        content: "   ",
+      });
+      expect(result).toEqual({ chunks: 0 });
+      expect(DocumentChunk.destroy).not.toHaveBeenCalled();
+    });
+
+    it("replaces prior chunks and stores embeddings on postgres via raw SQL", async () => {
+      db.getDialect.mockReturnValue("postgres");
+      TenantSettings.findAll.mockResolvedValue([{ key: "ai_api_key", value: "sk-key" }]);
+      axios.post.mockResolvedValue({ data: { data: [{ embedding: [0.1, 0.2] }] } });
+
+      const result = await aiService.ingestDocument("t1", {
+        sourceType: "Sop",
+        sourceId: "s1",
+        content: "hello world",
+      });
+
+      expect(DocumentChunk.destroy).toHaveBeenCalledWith({
+        where: { tenantId: "t1", sourceType: "Sop", sourceId: "s1" },
+      });
+      expect(db.query).toHaveBeenCalled();
+      expect(db.query.mock.calls[0][0]).toContain("INSERT INTO document_chunks");
+      expect(result.chunks).toBe(1);
+    });
+
+    it("uses the ORM on non-postgres engines", async () => {
+      db.getDialect.mockReturnValue("sqlite");
+      TenantSettings.findAll.mockResolvedValue([{ key: "ai_api_key", value: "sk-key" }]);
+      axios.post.mockResolvedValue({ data: { data: [{ embedding: [0.1] }] } });
+
+      const result = await aiService.ingestDocument("t1", {
+        sourceType: "Sop",
+        sourceId: "s1",
+        content: "hello world",
+      });
+
+      expect(DocumentChunk.create).toHaveBeenCalled();
+      expect(result.chunks).toBe(1);
+    });
+
+    it("skips chunks whose embedding cannot be generated", async () => {
+      TenantSettings.findAll.mockResolvedValue([]); // no API key => embedding null
+      const result = await aiService.ingestDocument("t1", {
+        sourceType: "Sop",
+        sourceId: "s1",
+        content: "hello world",
+      });
+      expect(result.chunks).toBe(0);
+      expect(DocumentChunk.create).not.toHaveBeenCalled();
+    });
+  });
+
+  // ================================================================
+  describe("retrieveContext", () => {
+    it("runs a pgvector similarity search on postgres", async () => {
+      db.getDialect.mockReturnValue("postgres");
+      db.query.mockResolvedValue([
+        { content: "a", similarity: "0.9" },
+        { content: "b", similarity: "0.5" },
+      ]);
+
+      const rows = await aiService.retrieveContext("t1", [0.1, 0.2], 3);
+
+      expect(db.query.mock.calls[0][0]).toContain("embedding <=> $1::vector");
+      expect(rows).toEqual([
+        { content: "a", similarity: 0.9 },
+        { content: "b", similarity: 0.5 },
+      ]);
+    });
+
+    it("falls back to recent chunks on non-postgres engines", async () => {
+      db.getDialect.mockReturnValue("sqlite");
+      DocumentChunk.findAll.mockResolvedValue([{ content: "x" }]);
+
+      const rows = await aiService.retrieveContext("t1", [0.1]);
+
+      expect(rows).toEqual([{ content: "x", similarity: null }]);
     });
   });
 });

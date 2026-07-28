@@ -13,6 +13,7 @@
  */
 
 const crypto = require("crypto");
+const dns = require("dns").promises;
 const { logger } = require("../middlewares/activityLog.middleware");
 const { AppError } = require("../utils/appError.util");
 const { db } = require("../config");
@@ -57,13 +58,20 @@ function generateVerificationToken() {
 }
 
 /**
- * Check the DNS TXT record for domain ownership.
- * NOTE: simulated. In production use dns.resolveTxt(`_domain_verify.${domain}`)
- * and confirm the expected token is present.
+ * Check the DNS TXT record for domain ownership: resolve
+ * `_domain_verify.<domain>` and confirm the expected token is present. A missing
+ * record / lookup error resolves to `false` (unverified), never throws.
  */
-async function checkDnsTxtRecord(domain /*, expectedToken */) {
-  logger.debug("DNS TXT check simulated", { domain });
-  return true;
+async function checkDnsTxtRecord(domain, expectedToken) {
+  try {
+    const records = await dns.resolveTxt(`_domain_verify.${domain}`);
+    // resolveTxt returns string[][] (each record may be split into chunks).
+    const values = records.map((chunks) => chunks.join(""));
+    return values.includes(expectedToken);
+  } catch (err) {
+    logger.debug("DNS TXT lookup failed", { domain, error: err.message });
+    return false;
+  }
 }
 
 /** DNS records the tenant must add to verify + route their domain. */
@@ -231,24 +239,20 @@ exports.verifyDomain = async (tenantId, domainId) => {
   const token = record.verificationToken || generateVerificationToken();
 
   try {
+    // Real DNS ownership check; both outcomes are now reachable.
     const verified = await checkDnsTxtRecord(record.domain, token);
-    // NOTE: the `verified === false` side of the three ternaries below is
-    // currently unreachable — checkDnsTxtRecord is a module-private simulation
-    // that unconditionally returns true (see its NOTE above) and has this as
-    // its only call site. The false branches stay so the logic is correct once
-    // the real dns.resolveTxt lookup replaces the stub.
     await record.update({
-      status: /* istanbul ignore next */ verified
+      status: verified
         ? DOMAIN_STATUS.ACTIVE
         : DOMAIN_STATUS.VERIFICATION_FAILED,
-      verifiedAt: /* istanbul ignore next */ verified ? new Date() : null,
+      verifiedAt: verified ? new Date() : null,
       lastCheckedAt: new Date(),
     });
 
     return {
       verified,
       status: record.status,
-      record: /* istanbul ignore next */ verified ? token : null,
+      record: verified ? token : null,
       dnsRecord: {
         type: "CNAME",
         name: `_domain_verify.${record.domain}`,
@@ -392,22 +396,78 @@ exports.resolveTenantByDomain = async (hostname) => {
 // ==========================================
 
 /**
- * Provision a TLS certificate for a domain (simulated Let's Encrypt).
+ * Provision a TLS certificate for a domain via ACME (Let's Encrypt) using the
+ * HTTP-01 challenge. The challenge token is written under the served
+ * `.well-known/acme-challenge/` directory; the domain must already resolve to
+ * this server for issuance to succeed. The issued private key is encrypted at
+ * rest with the tenant KMS envelope (never returned or logged in plaintext).
+ *
+ * Defaults to the Let's Encrypt STAGING directory; set ACME_DIRECTORY_URL to the
+ * production directory for real certificates. Guarded by TLS_AUTO_PROVISION.
+ *
+ * @param {string} domain
+ * @param {string} [tenantId] used to encrypt the private key via kms.service
  */
-exports.provisionTLSCertificate = async (domain) => {
+exports.provisionTLSCertificate = async (domain, tenantId) => {
   if (!TLS_AUTO_PROVISION()) {
     return { success: false, reason: "TLS auto-provisioning disabled" };
   }
 
   try {
-    logger.info("TLS certificate provisioned (simulated)", { domain });
+    const acme = require("acme-client");
+    const fs = require("fs");
+    const path = require("path");
+
+    const directoryUrl =
+      process.env.ACME_DIRECTORY_URL || acme.directory.letsencrypt.staging;
+    const challengeDir =
+      process.env.ACME_CHALLENGE_DIR ||
+      path.join(process.cwd(), ".well-known", "acme-challenge");
+
+    const accountKey = await acme.crypto.createPrivateKey();
+    const client = new acme.Client({ directoryUrl, accountKey });
+
+    const [certKey, csr] = await acme.crypto.createCsr({ commonName: domain });
+
+    const certificate = await client.auto({
+      csr,
+      email: process.env.ACME_ACCOUNT_EMAIL || `admin@${domain}`,
+      termsOfServiceAgreed: true,
+      challengePriority: ["http-01"],
+      challengeCreateFn: async (authz, challenge, keyAuthorization) => {
+        if (challenge.type !== "http-01") {
+          return;
+        }
+        await fs.promises.mkdir(challengeDir, { recursive: true });
+        await fs.promises.writeFile(
+          path.join(challengeDir, challenge.token),
+          keyAuthorization,
+        );
+      },
+      challengeRemoveFn: async (authz, challenge) => {
+        if (challenge.type !== "http-01") {
+          return;
+        }
+        await fs.promises
+          .unlink(path.join(challengeDir, challenge.token))
+          .catch(() => {});
+      },
+    });
+
+    // Encrypt the certificate private key at rest with the tenant KMS envelope.
+    const encryptedPrivateKey = tenantId
+      ? require("./kms.service").encryptData(tenantId, certKey.toString())
+      : null;
+
+    logger.info("TLS certificate provisioned via ACME", { domain });
     return {
       success: true,
       certificate: {
         domain,
+        certificate: certificate.toString(),
+        encryptedPrivateKey,
         issuedAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 90 * 86400000).toISOString(),
-        issuer: "Let's Encrypt (simulated)",
+        issuer: "Let's Encrypt",
       },
     };
   } catch (err) {

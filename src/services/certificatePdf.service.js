@@ -21,8 +21,12 @@ const storagePath = require("../utils/storagePath.util");
 const { logger } = require("../middlewares/activityLog.middleware");
 
 const TEMPLATE_PATH = path.join(__dirname, "..", "templates", "certificate.html");
-const SIGNING_SECRET =
-  process.env.CERT_SIGNING_SECRET || "callibrator-dev-cert-secret";
+const SIGNING_SECRET = process.env.CERT_SIGNING_SECRET;
+/* istanbul ignore next -- fail-fast startup guard: certificate signatures are
+   the platform's trust anchor, so we never fall back to a hardcoded default. */
+if (!SIGNING_SECRET) {
+  throw new Error("CERT_SIGNING_SECRET is required (no insecure default)");
+}
 const SIGNATURE_KEY_ID = "hmac-sha256-v1";
 
 const STATUS_COLORS = {
@@ -301,6 +305,9 @@ const verifyByCertificateNumber = async (certificateNumber, { baseUrl } = {}) =>
       signedAt: cert.signedAt,
       integrityHash,
       verifyUrl: resolveVerifyUrl(cert.certificateNumber, baseUrl),
+      // Relative path to the signed PDF (served from /uploads). The public
+      // verification page prefixes it with the API origin to display the doc.
+      documentUrl: cert.filePath || null,
     },
   };
 };

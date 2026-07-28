@@ -4,10 +4,9 @@
 // Tenant model (limitSeats, limitStorageMb, plan) and reports current usage.
 //
 // - Seats: counts non-deleted user accounts for the tenant.
-// - Storage: sums Attachment sizes. The central Attachment registry lands in
-//   the File/Document module (a later phase); until it exists this returns 0,
-//   so storage enforcement is a safe no-op that activates automatically once
-//   attachments are tracked.
+// - Storage: sums Attachment sizes. The Attachment registry now exists, so this
+//   reports real usage and storage enforcement is active (see
+//   middlewares/enforceQuota.middleware.js).
 // - Features: PLAN_FEATURES maps each plan to the capabilities it unlocks;
 //   requireFeature() (in middlewares/enforceQuota.js) gates routes on these.
 

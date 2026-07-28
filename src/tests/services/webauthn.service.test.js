@@ -1,509 +1,395 @@
-jest.mock("../../models", () => ({
-  Users: {
-    findOne: jest.fn(),
-    update: jest.fn(),
-  },
+/**
+ * Tests for the WebAuthn service (real @simplewebauthn/server verification +
+ * Redis-backed challenge store).
+ */
+
+jest.mock("@simplewebauthn/server", () => ({
+  generateRegistrationOptions: jest.fn(),
+  verifyRegistrationResponse: jest.fn(),
+  generateAuthenticationOptions: jest.fn(),
+  verifyAuthenticationResponse: jest.fn(),
 }));
 
-const webauthn = require("../../services/webauthn.service");
+jest.mock("../../services/redis.service", () => ({
+  get: jest.fn(),
+  set: jest.fn(),
+  del: jest.fn(),
+}));
+
+jest.mock("../../models", () => ({
+  Users: { findOne: jest.fn(), update: jest.fn() },
+}));
+
+jest.mock("../../middlewares/activityLog.middleware", () => ({
+  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+}));
+
+const lib = require("@simplewebauthn/server");
+const redis = require("../../services/redis.service");
 const { Users } = require("../../models");
+const webauthn = require("../../services/webauthn.service");
 
 describe("webauthn.service", () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it("getRegistrationOptions returns challenge and rp info", async () => {
-    const user = { id: "u1", email: "test@example.com", firstName: "Test", lastName: "User" };
-    const result = await webauthn.getRegistrationOptions(user);
-    expect(result.challenge).toBeDefined();
-    expect(result.rp.name).toBe("Callibrator");
-    expect(result.user.id).toBeDefined();
+  beforeEach(() => {
+    jest.clearAllMocks();
+    redis.set.mockResolvedValue(true);
+    redis.del.mockResolvedValue(true);
   });
 
-  it("getLoginOptions returns challenge", async () => {
-    const result = await webauthn.getLoginOptions("u1");
-    expect(result.challenge).toBeDefined();
-    expect(result.rpId).toBeDefined();
-  });
-
-  it("verifyRegistration updates user with credential", async () => {
-    const user = { id: "u1", email: "test@example.com", firstName: "Test", lastName: "User" };
-    const options = await webauthn.getRegistrationOptions(user);
-    Users.findOne.mockResolvedValue({ id: "u1", tenantId: "t1" });
-    Users.update.mockResolvedValue([1]);
-
-    const mockResponse = {
-      rawId: Buffer.from("credential-id").toString("base64url"),
-      response: {
-        clientDataJSON: Buffer.from(JSON.stringify({ type: "webauthn.create", challenge: options.challenge })).toString("base64url"),
-        attestationObject: Buffer.from("attestation").toString("base64url"),
-      },
-    };
-
-    const result = await webauthn.verifyRegistration("t1", "u1", mockResponse);
-    expect(result.success).toBe(true);
-    expect(Users.update).toHaveBeenCalled();
-  });
-
-  it("verifyLogin validates assertion and increments sign count", async () => {
-    const options = await webauthn.getLoginOptions("u1");
-    Users.findOne.mockResolvedValue({
-      id: "u1",
-      tenantId: "t1",
-      webauthnEnabled: true,
-      webauthnCredentialId: Buffer.from("credential-id").toString("hex"),
-      webauthnPublicKey: "public-key",
-      webauthnSignCount: 0,
-    });
-    Users.update.mockResolvedValue([1]);
-
-    const mockResponse = {
-      rawId: Buffer.from("credential-id").toString("base64url"),
-      response: {
-        clientDataJSON: Buffer.from(JSON.stringify({ type: "webauthn.get", challenge: options.challenge })).toString("base64url"),
-        authenticatorData: Buffer.from("auth-data").toString("base64url"),
-        signature: Buffer.from("signature").toString("base64url"),
-      },
-    };
-
-    const result = await webauthn.verifyLogin("t1", "u1", mockResponse);
-    expect(result.success).toBe(true);
-  });
-
-  describe("getStatus", () => {
-    it("reports an enrolled user as enabled", async () => {
-      Users.findOne.mockResolvedValue({
-        webauthnEnabled: true,
-        webauthnSignCount: 4,
-        updatedAt: new Date("2026-01-01T00:00:00Z"),
-      });
-
-      const result = await webauthn.getStatus("t1", "u1");
-
-      expect(Users.findOne).toHaveBeenCalledWith({
-        where: { id: "u1", tenantId: "t1" },
-        attributes: ["webauthnEnabled", "webauthnSignCount", "updatedAt"],
-      });
-      expect(result.enabled).toBe(true);
-      expect(result.signCount).toBe(4);
-      expect(result.lastUpdatedAt).toEqual(new Date("2026-01-01T00:00:00Z"));
-    });
-
-    it("normalizes an un-enrolled user to enabled=false, signCount=0", async () => {
-      Users.findOne.mockResolvedValue({
-        webauthnEnabled: null,
-        webauthnSignCount: null,
-        updatedAt: null,
-      });
-
-      const result = await webauthn.getStatus("t1", "u1");
-
-      expect(result.enabled).toBe(false);
-      expect(result.signCount).toBe(0);
-      expect(result.lastUpdatedAt).toBeNull();
-    });
-
-    it("never leaks the credential id or public key", async () => {
-      Users.findOne.mockResolvedValue({
-        webauthnEnabled: true,
-        webauthnSignCount: 1,
-        updatedAt: null,
-      });
-
-      const result = await webauthn.getStatus("t1", "u1");
-
-      expect(result).not.toHaveProperty("webauthnCredentialId");
-      expect(result).not.toHaveProperty("webauthnPublicKey");
-    });
-
-    it("throws 404 when the user is not in the tenant", async () => {
-      Users.findOne.mockResolvedValue(null);
-
-      await expect(webauthn.getStatus("t1", "nope")).rejects.toMatchObject({
-        status: 404,
-        message: "User not found",
-      });
-    });
-  });
-
-  it("disableWebauthn disables webauthn for user", async () => {
-    Users.update.mockResolvedValue([1]);
-    const result = await webauthn.disable("t1", "u1");
-    expect(result.success).toBe(true);
-    expect(Users.update).toHaveBeenCalledWith(
-      { webauthnEnabled: false, webauthnCredentialId: null, webauthnPublicKey: null },
-      { where: { id: "u1", tenantId: "t1" } }
-    );
-  });
-
-  // ================================================================
-  // Coverage: options shaping + every verification failure branch
-  // ================================================================
+  // ------------------------------------------------------ getRegistrationOptions
   describe("getRegistrationOptions", () => {
-    it("maps existing credentials into excludeCredentials", async () => {
-      const user = { id: "u1", email: "test@example.com", firstName: "T", lastName: "U" };
+    const user = { id: "u1", email: "a@b.com", firstName: "Ann", lastName: "Lee" };
 
-      const result = await webauthn.getRegistrationOptions(user, [
-        { credentialId: "cred-a", transports: ["internal"] },
-        { credentialId: "cred-b" },
-      ]);
+    it("generates options and stores the challenge", async () => {
+      lib.generateRegistrationOptions.mockResolvedValue({ challenge: "c1" });
 
-      expect(result.excludeCredentials).toEqual([
-        { id: "cred-a", type: "public-key", transports: ["internal"] },
-        // Defaults applied when the stored credential records no transports.
-        { id: "cred-b", type: "public-key", transports: ["usb", "nfc", "ble"] },
-      ]);
-    });
+      const result = await webauthn.getRegistrationOptions(user);
 
-    it("defaults excludeCredentials to empty when none are passed", async () => {
-      const result = await webauthn.getRegistrationOptions({
-        id: "u1",
-        email: "test@example.com",
-      });
-
-      expect(result.excludeCredentials).toEqual([]);
-    });
-
-    it("falls back to the email as displayName when both names are missing", async () => {
-      const result = await webauthn.getRegistrationOptions({
-        id: "u1",
-        email: "noname@example.com",
-      });
-
-      expect(result.user.displayName).toBe("noname@example.com");
-      expect(result.user.name).toBe("noname@example.com");
-    });
-
-    it("builds displayName from firstName alone when lastName is missing", async () => {
-      const result = await webauthn.getRegistrationOptions({
-        id: "u1",
-        email: "a@example.com",
-        firstName: "Ada",
-      });
-
-      expect(result.user.displayName).toBe("Ada");
-    });
-
-    it("requires user verification and a resident key", async () => {
-      const result = await webauthn.getRegistrationOptions({
-        id: "u1",
-        email: "a@example.com",
-      });
-
-      expect(result.authenticatorSelection).toEqual({
-        authenticatorAttachment: "platform",
-        requireResidentKey: true,
-        residentKey: "required",
-        userVerification: "required",
-      });
-      expect(result.pubKeyCredParams).toEqual([
-        { type: "public-key", alg: -7 },
-        { type: "public-key", alg: -257 },
-      ]);
-      expect(result.attestation).toBe("none");
-    });
-
-    it("issues a distinct challenge on every call", async () => {
-      const user = { id: "u1", email: "a@example.com" };
-      const a = await webauthn.getRegistrationOptions(user);
-      const b = await webauthn.getRegistrationOptions(user);
-
-      expect(a.challenge).not.toBe(b.challenge);
-    });
-  });
-
-  describe("verifyRegistration failures", () => {
-    // The service deliberately collapses every internal failure into one
-    // generic 400 so it leaks nothing about which check failed.
-    const b64url = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
-
-    it("rejects an assertion-typed clientData", async () => {
-      const options = await webauthn.getRegistrationOptions({
-        id: "u1",
-        email: "a@example.com",
-      });
-
-      await expect(
-        webauthn.verifyRegistration("t1", "u1", {
-          rawId: Buffer.from("cred").toString("base64url"),
-          response: {
-            clientDataJSON: b64url({ type: "webauthn.get", challenge: options.challenge }),
-          },
-        }),
-      ).rejects.toMatchObject({ status: 400, message: "WebAuthn registration failed" });
-
-      expect(Users.update).not.toHaveBeenCalled();
-    });
-
-    it("rejects a mismatched challenge", async () => {
-      await webauthn.getRegistrationOptions({ id: "u1", email: "a@example.com" });
-
-      await expect(
-        webauthn.verifyRegistration("t1", "u1", {
-          rawId: Buffer.from("cred").toString("base64url"),
-          response: {
-            clientDataJSON: b64url({
-              type: "webauthn.create",
-              challenge: "some-other-challenge",
-            }),
-          },
-        }),
-      ).rejects.toMatchObject({ status: 400, message: "WebAuthn registration failed" });
-
-      expect(Users.update).not.toHaveBeenCalled();
-    });
-
-    it("rejects when no challenge was ever issued for the user", async () => {
-      await expect(
-        webauthn.verifyRegistration("t1", "never-started", {
-          rawId: Buffer.from("cred").toString("base64url"),
-          response: {
-            clientDataJSON: b64url({ type: "webauthn.create", challenge: "x" }),
-          },
-        }),
-      ).rejects.toMatchObject({ status: 400, message: "WebAuthn registration failed" });
-    });
-
-    it("rejects malformed clientDataJSON", async () => {
-      await webauthn.getRegistrationOptions({ id: "u1", email: "a@example.com" });
-
-      await expect(
-        webauthn.verifyRegistration("t1", "u1", {
-          rawId: Buffer.from("cred").toString("base64url"),
-          response: {
-            clientDataJSON: Buffer.from("not json").toString("base64url"),
-          },
-        }),
-      ).rejects.toMatchObject({ status: 400, message: "WebAuthn registration failed" });
-    });
-
-    it("rejects when the DB update fails", async () => {
-      const options = await webauthn.getRegistrationOptions({
-        id: "u1",
-        email: "a@example.com",
-      });
-      Users.update.mockRejectedValue(new Error("DB down"));
-
-      await expect(
-        webauthn.verifyRegistration("t1", "u1", {
-          rawId: Buffer.from("cred").toString("base64url"),
-          response: {
-            clientDataJSON: b64url({
-              type: "webauthn.create",
-              challenge: options.challenge,
-            }),
-          },
-        }),
-      ).rejects.toMatchObject({ status: 400, message: "WebAuthn registration failed" });
-    });
-
-    it("persists the credential scoped to the tenant on success", async () => {
-      const options = await webauthn.getRegistrationOptions({
-        id: "u1",
-        email: "a@example.com",
-      });
-      Users.update.mockResolvedValue([1]);
-
-      await webauthn.verifyRegistration("t1", "u1", {
-        rawId: Buffer.from("cred").toString("base64url"),
-        response: {
-          clientDataJSON: b64url({
-            type: "webauthn.create",
-            challenge: options.challenge,
-          }),
-        },
-      });
-
-      expect(Users.update).toHaveBeenCalledWith(
+      expect(result).toEqual({ challenge: "c1" });
+      expect(redis.set).toHaveBeenCalledWith("webauthn:challenge:u1", "c1", 300);
+      expect(lib.generateRegistrationOptions).toHaveBeenCalledWith(
         expect.objectContaining({
-          webauthnCredentialId: Buffer.from("cred").toString("hex"),
-          webauthnSignCount: 0,
-          webauthnEnabled: true,
-          webauthnPublicKey: expect.any(String),
+          rpID: "localhost",
+          userName: "a@b.com",
+          userDisplayName: "Ann Lee",
         }),
-        { where: { id: "u1", tenantId: "t1" } },
       );
     });
 
-    it("consumes the challenge so it cannot be replayed", async () => {
-      const options = await webauthn.getRegistrationOptions({
-        id: "u1",
-        email: "a@example.com",
-      });
-      Users.update.mockResolvedValue([1]);
+    it("maps existing credentials into excludeCredentials", async () => {
+      lib.generateRegistrationOptions.mockResolvedValue({ challenge: "c1" });
 
-      const attestation = {
-        rawId: Buffer.from("cred").toString("base64url"),
-        response: {
-          clientDataJSON: b64url({
-            type: "webauthn.create",
-            challenge: options.challenge,
-          }),
-        },
-      };
+      await webauthn.getRegistrationOptions(user, [
+        { credentialId: "cred-1", transports: ["usb"] },
+      ]);
 
-      await expect(webauthn.verifyRegistration("t1", "u1", attestation)).resolves.toEqual({
-        success: true,
+      expect(lib.generateRegistrationOptions.mock.calls[0][0].excludeCredentials).toEqual([
+        { id: "cred-1", transports: ["usb"] },
+      ]);
+    });
+
+    it("falls back to email when both names are missing", async () => {
+      lib.generateRegistrationOptions.mockResolvedValue({ challenge: "c1" });
+
+      await webauthn.getRegistrationOptions({ id: "u1", email: "a@b.com" });
+
+      expect(lib.generateRegistrationOptions.mock.calls[0][0].userDisplayName).toBe("a@b.com");
+    });
+
+    it("builds displayName from firstName alone", async () => {
+      lib.generateRegistrationOptions.mockResolvedValue({ challenge: "c1" });
+
+      await webauthn.getRegistrationOptions({ id: "u1", email: "a@b.com", firstName: "Ann" });
+
+      expect(lib.generateRegistrationOptions.mock.calls[0][0].userDisplayName).toBe("Ann");
+    });
+
+    it("throws 503 when the challenge cannot be stored", async () => {
+      lib.generateRegistrationOptions.mockResolvedValue({ challenge: "c1" });
+      redis.set.mockResolvedValue(false);
+
+      await expect(webauthn.getRegistrationOptions(user)).rejects.toMatchObject({
+        status: 503,
       });
-      // Replaying the identical attestation must now fail.
-      await expect(
-        webauthn.verifyRegistration("t1", "u1", attestation),
-      ).rejects.toMatchObject({ status: 400 });
     });
   });
 
-  describe("verifyLogin failures", () => {
-    // Every internal failure collapses into one generic 401.
-    const b64url = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  // ------------------------------------------------------------ getLoginOptions
+  describe("getLoginOptions", () => {
+    it("restricts allowCredentials to the enrolled credential", async () => {
+      Users.findOne.mockResolvedValue({ webauthnCredentialId: "cred-1" });
+      lib.generateAuthenticationOptions.mockResolvedValue({ challenge: "c2" });
 
-    it("rejects a registration-typed clientData", async () => {
-      const options = await webauthn.getLoginOptions("u1");
+      const result = await webauthn.getLoginOptions("u1");
 
-      await expect(
-        webauthn.verifyLogin("t1", "u1", {
-          rawId: Buffer.from("cred").toString("base64url"),
-          response: {
-            clientDataJSON: b64url({
-              type: "webauthn.create",
-              challenge: options.challenge,
-            }),
-          },
-        }),
-      ).rejects.toMatchObject({ status: 401, message: "WebAuthn authentication failed" });
-
-      expect(Users.findOne).not.toHaveBeenCalled();
+      expect(result).toEqual({ challenge: "c2" });
+      expect(lib.generateAuthenticationOptions.mock.calls[0][0].allowCredentials).toEqual([
+        { id: "cred-1" },
+      ]);
+      expect(redis.set).toHaveBeenCalledWith("webauthn:challenge:u1", "c2", 300);
     });
 
-    it("rejects a mismatched challenge", async () => {
+    it("uses an empty allowCredentials list when the user has no credential", async () => {
+      Users.findOne.mockResolvedValue({ webauthnCredentialId: null });
+      lib.generateAuthenticationOptions.mockResolvedValue({ challenge: "c2" });
+
       await webauthn.getLoginOptions("u1");
 
-      await expect(
-        webauthn.verifyLogin("t1", "u1", {
-          rawId: Buffer.from("cred").toString("base64url"),
-          response: {
-            clientDataJSON: b64url({ type: "webauthn.get", challenge: "wrong" }),
-          },
-        }),
-      ).rejects.toMatchObject({ status: 401, message: "WebAuthn authentication failed" });
+      expect(lib.generateAuthenticationOptions.mock.calls[0][0].allowCredentials).toEqual([]);
     });
 
-    it("rejects when no challenge was ever issued for the user", async () => {
-      await expect(
-        webauthn.verifyLogin("t1", "never-started", {
-          rawId: Buffer.from("cred").toString("base64url"),
-          response: {
-            clientDataJSON: b64url({ type: "webauthn.get", challenge: "x" }),
-          },
-        }),
-      ).rejects.toMatchObject({ status: 401, message: "WebAuthn authentication failed" });
-    });
-
-    it("rejects when the user does not exist in the tenant", async () => {
-      const options = await webauthn.getLoginOptions("u1");
+    it("uses an empty list when the user is not found", async () => {
       Users.findOne.mockResolvedValue(null);
+      lib.generateAuthenticationOptions.mockResolvedValue({ challenge: "c2" });
 
-      await expect(
-        webauthn.verifyLogin("t1", "u1", {
-          rawId: Buffer.from("cred").toString("base64url"),
-          response: {
-            clientDataJSON: b64url({ type: "webauthn.get", challenge: options.challenge }),
-          },
-        }),
-      ).rejects.toMatchObject({ status: 401, message: "WebAuthn authentication failed" });
+      await webauthn.getLoginOptions("u1");
 
-      expect(Users.update).not.toHaveBeenCalled();
+      expect(lib.generateAuthenticationOptions.mock.calls[0][0].allowCredentials).toEqual([]);
     });
+  });
 
-    it("rejects when webauthn is not enabled for the user", async () => {
-      const options = await webauthn.getLoginOptions("u1");
-      Users.findOne.mockResolvedValue({ id: "u1", webauthnEnabled: false });
+  // -------------------------------------------------------- verifyRegistration
+  describe("verifyRegistration", () => {
+    const resp = { id: "cred-1" };
 
-      await expect(
-        webauthn.verifyLogin("t1", "u1", {
-          rawId: Buffer.from("cred").toString("base64url"),
-          response: {
-            clientDataJSON: b64url({ type: "webauthn.get", challenge: options.challenge }),
-          },
-        }),
-      ).rejects.toMatchObject({ status: 401, message: "WebAuthn authentication failed" });
+    it("throws 400 when the challenge is missing/expired", async () => {
+      redis.get.mockResolvedValue(null);
 
-      expect(Users.update).not.toHaveBeenCalled();
-    });
-
-    it("rejects a credential id that does not match the enrolled one", async () => {
-      const options = await webauthn.getLoginOptions("u1");
-      Users.findOne.mockResolvedValue({
-        id: "u1",
-        webauthnEnabled: true,
-        webauthnCredentialId: Buffer.from("enrolled-cred").toString("hex"),
-        webauthnSignCount: 3,
+      await expect(webauthn.verifyRegistration("t1", "u1", resp)).rejects.toMatchObject({
+        status: 400,
       });
-
-      await expect(
-        webauthn.verifyLogin("t1", "u1", {
-          rawId: Buffer.from("attacker-cred").toString("base64url"),
-          response: {
-            clientDataJSON: b64url({ type: "webauthn.get", challenge: options.challenge }),
-          },
-        }),
-      ).rejects.toMatchObject({ status: 401, message: "WebAuthn authentication failed" });
-
-      expect(Users.update).not.toHaveBeenCalled();
     });
 
-    it("rejects when the sign-count update fails", async () => {
-      const options = await webauthn.getLoginOptions("u1");
-      Users.findOne.mockResolvedValue({
-        id: "u1",
-        webauthnEnabled: true,
-        webauthnCredentialId: Buffer.from("cred").toString("hex"),
-        webauthnSignCount: 0,
-      });
-      Users.update.mockRejectedValue(new Error("DB down"));
+    it("throws 400 when the library rejects the attestation", async () => {
+      redis.get.mockResolvedValue("c1");
+      lib.verifyRegistrationResponse.mockRejectedValue(new Error("bad attestation"));
 
-      await expect(
-        webauthn.verifyLogin("t1", "u1", {
-          rawId: Buffer.from("cred").toString("base64url"),
-          response: {
-            clientDataJSON: b64url({ type: "webauthn.get", challenge: options.challenge }),
-          },
-        }),
-      ).rejects.toMatchObject({ status: 401, message: "WebAuthn authentication failed" });
+      await expect(webauthn.verifyRegistration("t1", "u1", resp)).rejects.toMatchObject({
+        status: 400,
+      });
     });
 
-    it("increments the sign count from its stored value on success", async () => {
-      const options = await webauthn.getLoginOptions("u1");
-      Users.findOne.mockResolvedValue({
-        id: "u1",
-        webauthnEnabled: true,
-        webauthnCredentialId: Buffer.from("cred").toString("hex"),
-        webauthnSignCount: 41,
-      });
-      Users.update.mockResolvedValue([1]);
+    it("throws 400 when the attestation is not verified", async () => {
+      redis.get.mockResolvedValue("c1");
+      lib.verifyRegistrationResponse.mockResolvedValue({ verified: false });
 
-      await webauthn.verifyLogin("t1", "u1", {
-        rawId: Buffer.from("cred").toString("base64url"),
-        response: {
-          clientDataJSON: b64url({ type: "webauthn.get", challenge: options.challenge }),
+      await expect(webauthn.verifyRegistration("t1", "u1", resp)).rejects.toMatchObject({
+        status: 400,
+      });
+    });
+
+    it("throws 400 when registrationInfo is absent", async () => {
+      redis.get.mockResolvedValue("c1");
+      lib.verifyRegistrationResponse.mockResolvedValue({ verified: true, registrationInfo: null });
+
+      await expect(webauthn.verifyRegistration("t1", "u1", resp)).rejects.toMatchObject({
+        status: 400,
+      });
+    });
+
+    it("persists the real credential on success", async () => {
+      redis.get.mockResolvedValue("c1");
+      lib.verifyRegistrationResponse.mockResolvedValue({
+        verified: true,
+        registrationInfo: {
+          credential: { id: "cred-1", publicKey: Buffer.from([1, 2, 3]), counter: 5 },
         },
       });
 
-      expect(Users.findOne).toHaveBeenCalledWith({
-        where: { id: "u1", tenantId: "t1" },
+      const result = await webauthn.verifyRegistration("t1", "u1", resp);
+
+      expect(result).toEqual({ success: true });
+      const [values, opts] = Users.update.mock.calls[0];
+      expect(values).toMatchObject({
+        webauthnCredentialId: "cred-1",
+        webauthnSignCount: 5,
+        webauthnEnabled: true,
       });
+      expect(typeof values.webauthnPublicKey).toBe("string");
+      expect(opts).toEqual({ where: { id: "u1", tenantId: "t1" } });
+      // Challenge consumed (deleted) so it cannot be replayed.
+      expect(redis.del).toHaveBeenCalledWith("webauthn:challenge:u1");
+    });
+  });
+
+  // --------------------------------------------------------------- verifyLogin
+  describe("verifyLogin", () => {
+    const enrolled = {
+      webauthnEnabled: true,
+      webauthnCredentialId: "cred-1",
+      // Length 3 (not a multiple of 4) so base64url decoding exercises padding.
+      webauthnPublicKey: "AQI",
+      webauthnSignCount: 5,
+    };
+    const resp = { id: "cred-1" };
+
+    it("throws 404 when webauthn is not enrolled", async () => {
+      Users.findOne.mockResolvedValue({ webauthnEnabled: false });
+
+      await expect(webauthn.verifyLogin("t1", "u1", resp)).rejects.toMatchObject({
+        status: 404,
+      });
+    });
+
+    it("throws 400 when the challenge is missing", async () => {
+      Users.findOne.mockResolvedValue(enrolled);
+      redis.get.mockResolvedValue(null);
+
+      await expect(webauthn.verifyLogin("t1", "u1", resp)).rejects.toMatchObject({
+        status: 400,
+      });
+    });
+
+    it("throws 401 when the library rejects the assertion", async () => {
+      Users.findOne.mockResolvedValue(enrolled);
+      redis.get.mockResolvedValue("c2");
+      lib.verifyAuthenticationResponse.mockRejectedValue(new Error("bad sig"));
+
+      await expect(webauthn.verifyLogin("t1", "u1", resp)).rejects.toMatchObject({
+        status: 401,
+      });
+    });
+
+    it("throws 401 when the assertion is not verified", async () => {
+      Users.findOne.mockResolvedValue(enrolled);
+      redis.get.mockResolvedValue("c2");
+      lib.verifyAuthenticationResponse.mockResolvedValue({ verified: false });
+
+      await expect(webauthn.verifyLogin("t1", "u1", resp)).rejects.toMatchObject({
+        status: 401,
+      });
+    });
+
+    it("advances the sign counter on success", async () => {
+      Users.findOne.mockResolvedValue(enrolled);
+      redis.get.mockResolvedValue("c2");
+      lib.verifyAuthenticationResponse.mockResolvedValue({
+        verified: true,
+        authenticationInfo: { newCounter: 6 },
+      });
+
+      const result = await webauthn.verifyLogin("t1", "u1", resp);
+
+      expect(result).toEqual({ success: true });
       expect(Users.update).toHaveBeenCalledWith(
-        { webauthnSignCount: 42 },
+        { webauthnSignCount: 6 },
         { where: { id: "u1" } },
       );
     });
+
+    it("defaults a missing stored counter to zero", async () => {
+      Users.findOne.mockResolvedValue({
+        webauthnEnabled: true,
+        webauthnCredentialId: "cred-1",
+        webauthnPublicKey: "AQI",
+        // no webauthnSignCount
+      });
+      redis.get.mockResolvedValue("c2");
+      lib.verifyAuthenticationResponse.mockResolvedValue({
+        verified: true,
+        authenticationInfo: { newCounter: 1 },
+      });
+
+      await webauthn.verifyLogin("t1", "u1", resp);
+
+      expect(lib.verifyAuthenticationResponse.mock.calls[0][0].credential.counter).toBe(0);
+    });
   });
 
-  describe("getLoginOptions", () => {
-    it("returns an empty allowCredentials list and requires user verification", async () => {
-      const result = await webauthn.getLoginOptions("u1");
+  // ----------------------------------------------------------------- getStatus
+  describe("getStatus", () => {
+    it("reports an enrolled user", async () => {
+      Users.findOne.mockResolvedValue({
+        webauthnEnabled: true,
+        webauthnSignCount: 3,
+        updatedAt: new Date("2026-01-01"),
+      });
 
-      expect(result.allowCredentials).toEqual([]);
-      expect(result.userVerification).toBe("required");
-      expect(result.timeout).toBe(60000);
+      const result = await webauthn.getStatus("t1", "u1");
+
+      expect(result).toEqual({
+        enabled: true,
+        signCount: 3,
+        lastUpdatedAt: new Date("2026-01-01"),
+      });
+    });
+
+    it("normalizes missing signCount/updatedAt", async () => {
+      Users.findOne.mockResolvedValue({ webauthnEnabled: false });
+
+      const result = await webauthn.getStatus("t1", "u1");
+
+      expect(result).toEqual({ enabled: false, signCount: 0, lastUpdatedAt: null });
+    });
+
+    it("throws 404 when the user is not found", async () => {
+      Users.findOne.mockResolvedValue(null);
+
+      await expect(webauthn.getStatus("t1", "u1")).rejects.toMatchObject({ status: 404 });
+    });
+  });
+
+  // ------------------------------------------------------------------- disable
+  describe("disable", () => {
+    it("clears the credential fields", async () => {
+      const result = await webauthn.disable("t1", "u1");
+
+      expect(result).toEqual({ success: true });
+      expect(Users.update).toHaveBeenCalledWith(
+        {
+          webauthnEnabled: false,
+          webauthnCredentialId: null,
+          webauthnPublicKey: null,
+          webauthnSignCount: 0,
+        },
+        { where: { id: "u1", tenantId: "t1" } },
+      );
+    });
+  });
+
+  // -------------------------------------------------------------- ORIGIN config
+  describe("expectedOrigin resolution", () => {
+    const OLD = { ...process.env };
+    afterEach(() => {
+      process.env = { ...OLD };
+      jest.resetModules();
+    });
+
+    const loadWith = (env) => {
+      jest.resetModules();
+      Object.assign(process.env, env);
+      jest.doMock("@simplewebauthn/server", () => lib);
+      jest.doMock("../../services/redis.service", () => redis);
+      jest.doMock("../../models", () => ({ Users }));
+      return require("../../services/webauthn.service");
+    };
+
+    const okRegistration = () => {
+      redis.get.mockResolvedValue("c1");
+      redis.del.mockResolvedValue(true);
+      lib.verifyRegistrationResponse.mockResolvedValue({
+        verified: true,
+        registrationInfo: { credential: { id: "c", publicKey: Buffer.from([1]), counter: 0 } },
+      });
+    };
+
+    it("defaults to http://localhost:3000 for the localhost RP", async () => {
+      delete process.env.WEBAUTHN_ORIGIN;
+      delete process.env.WEBAUTHN_RP_ID;
+      const svc = loadWith({});
+      okRegistration();
+
+      await svc.verifyRegistration("t1", "u1", {});
+
+      expect(lib.verifyRegistrationResponse.mock.calls.at(-1)[0].expectedOrigin).toBe(
+        "http://localhost:3000",
+      );
+    });
+
+    it("honors an explicit WEBAUTHN_ORIGIN", async () => {
+      const svc = loadWith({
+        WEBAUTHN_ORIGIN: "https://app.example.com",
+        WEBAUTHN_RP_ID: "example.com",
+      });
+      okRegistration();
+
+      await svc.verifyRegistration("t1", "u1", {});
+
+      expect(lib.verifyRegistrationResponse.mock.calls.at(-1)[0].expectedOrigin).toBe(
+        "https://app.example.com",
+      );
+    });
+
+    it("derives https://<rpID> for a non-localhost RP", async () => {
+      delete process.env.WEBAUTHN_ORIGIN;
+      const svc = loadWith({ WEBAUTHN_RP_ID: "example.com" });
+      okRegistration();
+
+      await svc.verifyRegistration("t1", "u1", {});
+
+      expect(lib.verifyRegistrationResponse.mock.calls.at(-1)[0].expectedOrigin).toBe(
+        "https://example.com",
+      );
     });
   });
 });

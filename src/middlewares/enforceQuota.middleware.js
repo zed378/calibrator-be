@@ -37,8 +37,8 @@ const enforceSeatQuota = () => async (req, res, next) => {
 /**
  * Block uploads that would exceed the tenant's storage limit. Uses the request
  * Content-Length so it can reject BEFORE the file is written to disk; place it
- * ahead of the multer/upload middleware. No-op until the Attachment registry
- * (File/Document module) makes storage usage measurable.
+ * ahead of the multer/upload middleware. Active now that the Attachment registry
+ * makes storage usage measurable.
  */
 const enforceStorageQuota = () => async (req, res, next) => {
   try {

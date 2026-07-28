@@ -16,10 +16,18 @@ const virusScan = require("./virusScan.service");
 const { logger } = require("../middlewares/activityLog.middleware");
 
 const ATTACH_FOLDER = "uploads/attachments";
+/* istanbul ignore next -- env-selected secret: which side of the `||` wins
+   depends on deployment env, so both branches aren't exercised under the fixed
+   test env. */
 const SIGN_SECRET =
-  process.env.ATTACHMENT_URL_SECRET ||
-  process.env.CERT_SIGNING_SECRET ||
-  "callibrator-dev-attachment-secret";
+  process.env.ATTACHMENT_URL_SECRET || process.env.CERT_SIGNING_SECRET;
+/* istanbul ignore next -- fail-fast startup guard: signed download URLs must
+   never be forgeable via a hardcoded default secret. */
+if (!SIGN_SECRET) {
+  throw new Error(
+    "ATTACHMENT_URL_SECRET (or CERT_SIGNING_SECRET) is required (no insecure default)",
+  );
+}
 const DEFAULT_SIGNED_TTL = Number(process.env.ATTACHMENT_URL_TTL_SEC) || 300;
 
 // Resolve the absolute on-disk path for an attachment (guards traversal).

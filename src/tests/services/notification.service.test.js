@@ -198,19 +198,15 @@ describe("notification.service", () => {
       expect(result).toBeNull();
     });
 
-    it("should dispatch email/sms channels when specified", async () => {
+    it("should dispatch the email channel when specified", async () => {
       const created = mockNotification({ id: "n-3", userId: "u-1" });
       Notification.create.mockResolvedValueOnce(created);
-      User.findByPk.mockResolvedValueOnce({
-        email: "u@test.com",
-        firstName: "User",
-      });
 
       await emitNotification({
         title: "Email test",
         message: "Test",
         userId: "u-1",
-        channels: ["email", "sms"],
+        channels: ["email"],
         recipientEmail: "test@example.com",
       });
 
@@ -221,8 +217,8 @@ describe("notification.service", () => {
     // Branch coverage: channel routing + recipient resolution
     // ------------------------------------------------------------------
     it("should strip channel-routing fields before persisting the row", async () => {
-      // channels/recipientEmail/recipientPhone/recipientName are not Notification
-      // columns — passing them to create() would be a Sequelize error.
+      // channels/recipientEmail/recipientName are not Notification columns —
+      // passing them to create() would be a Sequelize error.
       Notification.create.mockResolvedValueOnce(mockNotification({ id: "n-strip" }));
 
       await emitNotification({
@@ -231,7 +227,6 @@ describe("notification.service", () => {
         userId: "u-1",
         channels: ["email"],
         recipientEmail: "a@b.com",
-        recipientPhone: "+1",
         recipientName: "Ann",
       });
 
@@ -242,7 +237,7 @@ describe("notification.service", () => {
       });
     });
 
-    it("should not dispatch channels when DEFAULT_CHANNELS has no email/sms", async () => {
+    it("should not dispatch channels when DEFAULT_CHANNELS has no email", async () => {
       // DEFAULT_CHANNELS is ["realtime"] — realtime-only means no dispatch call.
       Notification.create.mockResolvedValueOnce(mockNotification({ id: "n-def" }));
 
@@ -258,25 +253,23 @@ describe("notification.service", () => {
       User.findByPk.mockResolvedValueOnce({
         email: "looked-up@test.com",
         firstName: "Looked",
-        phone: "+62811",
       });
 
       await emitNotification({
         title: "T",
         message: "M",
         userId: "u-7",
-        channels: ["email", "sms"],
+        channels: ["email"],
       });
 
       expect(User.findByPk).toHaveBeenCalledWith("u-7", {
-        attributes: ["email", "firstName", "phone"],
+        attributes: ["email", "firstName"],
       });
       expect(notificationChannels.dispatch).toHaveBeenCalledWith(
         expect.any(Object),
         {
-          channels: ["email", "sms"],
+          channels: ["email"],
           recipientEmail: "looked-up@test.com",
-          recipientPhone: "+62811",
           recipientName: "Looked",
         },
       );
@@ -291,20 +284,18 @@ describe("notification.service", () => {
         title: "T",
         message: "M",
         userId: "u-7",
-        channels: ["email", "sms"],
+        channels: ["email"],
         recipientEmail: "explicit@test.com",
-        recipientPhone: "+62999",
         recipientName: "Explicit",
       });
 
-      // Both contact fields were supplied, so no lookup is needed at all.
+      // The email was supplied, so no user lookup is needed.
       expect(User.findByPk).not.toHaveBeenCalled();
       expect(notificationChannels.dispatch).toHaveBeenCalledWith(
         expect.any(Object),
         {
-          channels: ["email", "sms"],
+          channels: ["email"],
           recipientEmail: "explicit@test.com",
-          recipientPhone: "+62999",
           recipientName: "Explicit",
         },
       );
@@ -328,7 +319,6 @@ describe("notification.service", () => {
         {
           channels: ["email"],
           recipientEmail: undefined,
-          recipientPhone: undefined,
           recipientName: undefined,
         },
       );

@@ -38,16 +38,16 @@ const {
   initCalibrationScheduler,
 } = require("./src/middlewares/calibrationScheduler.middleware");
 
+const {
+  initRetentionScheduler,
+} = require("./src/middlewares/retentionScheduler.middleware");
+
 const { initRedis, closeRedis } = require("./src/services/redis.service");
 
 const {
   processEmailQueue,
   closeRabbitMQ,
 } = require("./src/services/emailQueue.service");
-
-const {
-  initializePostgresRLS,
-} = require("./src/middlewares/rlsEnforcement.middleware");
 
 const { accessLog } = require("./src/middlewares/accessLog.middleware");
 
@@ -160,11 +160,12 @@ app.use(
         return callback(null, true);
       }
 
-      // Strict: only allow explicitly configured origins
-      if (
-        allowedOrigins.includes(origin.trim()) ||
-        allowedOrigins.includes("*")
-      ) {
+      // Strict: only allow explicitly configured origins. A wildcard "*" is
+      // intentionally NOT honored here — this CORS policy runs with
+      // credentials:true, and reflecting an arbitrary origin back with
+      // credentials would let any site make authenticated cross-origin
+      // requests. Configure explicit origins instead.
+      if (allowedOrigins.includes(origin.trim())) {
         return callback(null, true);
       }
 
@@ -372,6 +373,7 @@ const dashboardRoutes = require("./src/routes/api/dashboard.route");
 const userPermissionsRoutes = require("./src/routes/api/userPermissions.route");
 const quotaRoutes = require("./src/routes/api/quota.route");
 const attachmentRoutes = require("./src/routes/api/attachments.route");
+const storageRoutes = require("./src/routes/api/storage.route");
 const reportRoutes = require("./src/routes/api/reports.route");
 const webhookRoutes = require("./src/routes/api/webhooks.route");
 const apiKeyRoutes = require("./src/routes/api/apiKeys.route");
@@ -440,6 +442,7 @@ app.use("/api/v1/dashboard", dashboardRoutes);
 app.use("/api/v1/user-permissions", userPermissionsRoutes);
 app.use("/api/v1/quota", quotaRoutes);
 app.use("/api/v1/attachments", attachmentRoutes);
+app.use("/api/v1/storage", storageRoutes);
 app.use("/api/v1/reports", reportRoutes);
 app.use("/api/v1/webhooks", webhookRoutes);
 app.use("/api/v1/api-keys", apiKeyRoutes);
@@ -457,6 +460,12 @@ app.use("/api/v1/feature-flags", featureFlagRoutes);
 app.use("/api/v1/tenants", tenantLifecycleRoutes);
 app.use("/api/v1/tenants", dataRetentionRoutes);
 app.use("/api/v1/oidc", oidcRoutes);
+// Also mount OIDC at the issuer root: the discovery document advertises its
+// endpoints at `<issuer>/oidc/...` (issuer = host root), so relying parties
+// fetch `/oidc/.well-known/openid-configuration` and `/oidc/.well-known/jwks.json`
+// directly — not under the `/api/v1` API prefix. Serve them where discovery
+// says they are.
+app.use("/oidc", oidcRoutes);
 app.use("/api/v1/webauthn", webauthnRoutes);
 app.use("/api/v1/network-security", networkSecurityRoutes);
 app.use("/api/v1/metered-billing", meteredBillingRoutes);
@@ -594,13 +603,11 @@ async function startServer() {
     await db.sync();
     logger.info("All database tables synced");
 
-    // Apply Postgres RLS policies for tenant isolation
-    if (typeof db.setupPostgresRLS === "function") {
-      await db.setupPostgresRLS();
-    }
-
-    // Apply enhanced RLS enforcement (FORCE RLS + session variable setup)
-    await initializePostgresRLS();
+    // NOTE: Postgres ROW LEVEL SECURITY is no longer applied. It is
+    // Postgres-only (incompatible with running on multiple database engines)
+    // and its policy carried a fail-open branch. Tenant isolation is enforced
+    // in the ORM layer by utils/tenantScope.util.js (deny-by-default) for every
+    // dialect. Migration 0013 drops any policies left on existing databases.
 
     // Apply pending schema/data migrations (versioned, non-destructive) on top
     // of the model-driven sync — for column renames, custom indexes, backfills.
@@ -624,6 +631,14 @@ async function startServer() {
     cronBackup();
     initSessionCleanup();
     initCalibrationScheduler();
+    initRetentionScheduler();
+
+    // Start the batch-job worker (RabbitMQ consumer). No-op in inline mode.
+    require("./src/workers/batchJob.worker")
+      .startBatchJobWorker()
+      .catch((err) =>
+        console.error("Failed to start batch job worker:", err.message),
+      );
 
     // Start Tenant Lifecycle Processor (grace period expiry, offboarding)
     const tenantLifecycleService = require("./src/services/tenantLifecycle.service");
